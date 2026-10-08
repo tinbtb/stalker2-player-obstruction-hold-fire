@@ -1,0 +1,10 @@
+/.tools/
+/build/
+/dist/
+*.dll
+*.exe
+*.pdb
+*.lib
+*.log
+player_snapshot.txt
+__pycache__/

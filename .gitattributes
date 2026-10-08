@@ -1,0 +1,3 @@
+* text=auto eol=lf
+src/PlayerObstructionHoldFire.c -text
+mod/Scripts/main.lua -text
