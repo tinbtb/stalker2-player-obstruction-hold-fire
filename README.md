@@ -2,6 +2,8 @@
 
 An experimental Windows x64 UE4SS mod that asks Neutral and Friendly NPCs to hold their fire when the player obstructs their current aim line. Once the player moves aside, the NPC can resume shooting. The game decides which characters are Neutral or Friendly.
 
+**AI-generated code:** The native C code, Lua bridge, and build/packaging scripts were generated using AI (OpenAI Codex), under the author's direction. The author has personally tested the mod in-game.
+
 The first tester reports that this version works well in-game. Wider compatibility testing is still needed. Withholding a shot prevents creation of that bullet, which should also prevent its bleeding and armor-wear effects; this does not protect against other sources of damage.
 
 ## Download and install
@@ -9,7 +11,7 @@ The first tester reports that this version works well in-game. Wider compatibili
 Download **PlayerObstructionHoldFire_v0.2.0-testing_UE4SS.zip** from [Releases](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases). GitHub's automatic "Source code" archives contain source, not a ready-to-play DLL.
 
 1. Close the game completely.
-2. Install a compatible [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS/releases) first if you do not already use it. Initial testing used UE4SS 3.0.1 Beta #0, Git revision `44afb36d`, on UE 5.5. Other UE4SS versions have not been validated here. This mod needs `package.loadlib`, `LoopAsync`, and `ExecuteInGameThread`.
+2. Install UE4SS if you do not already use it. **I (tinbtb) personally use the UE4SS build supplied by [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/), and that is the setup I tested this mod with.** Follow Ultra+ Manager's installation instructions for S.T.A.L.K.E.R. 2. If you already have its UE4SS build installed, keep that installation. The tested build identifies itself as UE4SS 3.0.1 Beta #0, Git revision `44afb36d`, on UE 5.5. [Other UE4SS builds](https://github.com/UE4SS-RE/RE-UE4SS/releases) have not been validated here. This mod needs `package.loadlib`, `LoopAsync`, and `ExecuteInGameThread`.
 3. Extract the mod ZIP into your game's `Stalker2/Binaries/Win64` folder. Merge the `ue4ss` folder with the existing one.
 4. Confirm `ue4ss/Mods/PlayerObstructionHoldFire/enabled.txt` and `Scripts/PlayerObstructionHoldFire.dll` exist.
 5. Start the game and load a save.
@@ -65,7 +67,7 @@ Requires 64-bit Windows, PowerShell, and Python 3. The compiler setup script dow
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\get-zig.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .uild.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 You may supply your own Zig 0.15.2 compiler with `-ZigPath C:\path\to\zig.exe` to `build.ps1`. Build outputs and the testing ZIP are placed in `build/` and `dist/`. The build runs 16 capsule-intersection cases and checks that the DLL refuses an unsupported host before packaging. Optional exact-executable validation:
