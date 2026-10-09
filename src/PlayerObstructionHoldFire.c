@@ -82,8 +82,12 @@ static DWORD snapshot_thread;
 static ULONGLONG snapshot_time;
 static int player_index, player_serial;
 static double radius, halfheight;
-static char snapshot_path[MAX_PATH];
+static uint64_t bridge_address, bridge_dimensions;
+static unsigned bridge_digits;
+static DWORD bridge_thread;
 static volatile LONG64 checks, blocked, no_player, unsupported;
+static volatile LONG64 snapshot_attempts, snapshot_successes;
+#define SAFETY_MARGIN_CM 40.0
 static int readable(uintptr_t p,size_t n){
  MEMORY_BASIC_INFORMATION m;
  if(!p||!VirtualQuery((void*)p,&m,sizeof(m)))return 0;
@@ -111,7 +115,33 @@ static int intersects(const double o[3],const double d[3],double length,const do
  double x=a[0]+t*v[0],y=a[1]+t*v[1],q=a[2]+t*v[2]-u*z;
  return x*x+y*y+q*q<=r*r;
 }
-static unsigned char gate(void *controller,void *actor){
+
+// Diagnostic QPC durations include instrumentation overhead; cumulative counters.
+typedef struct { volatile LONG64 count, total, maximum; } Metric;
+static Metric metrics[10];
+static LARGE_INTEGER perf_frequency;
+static LONG64 starts[8];
+static char metrics_path[MAX_PATH];
+static LONG64 stamp(void){ LARGE_INTEGER t;QueryPerformanceCounter(&t);return t.QuadPart; }
+static void record_metric(int i,LONG64 start){
+ LONG64 dt=stamp()-start,old;InterlockedIncrement64(&metrics[i].count);
+ InterlockedAdd64(&metrics[i].total,dt);
+ do{old=metrics[i].maximum;if(dt<=old)break;}while(InterlockedCompareExchange64(&metrics[i].maximum,dt,old)!=old);
+}
+#define MARKERS(name,index) \
+__declspec(dllexport) int luaopen_MetricBegin##name(void *L){(void)L;starts[index]=stamp();return 0;} \
+__declspec(dllexport) int luaopen_MetricEnd##name(void *L){(void)L;record_metric(index,starts[index]);return 0;}
+MARKERS(Callback,0)
+MARKERS(Lookup,1)
+MARKERS(Capsule,2)
+MARKERS(Write,3)
+MARKERS(Queue,4)
+__declspec(dllexport) int luaopen_ControllerCacheHit(void *L){(void)L;InterlockedIncrement64(&metrics[7].count);return 0;}
+__declspec(dllexport) int luaopen_ControllerCacheRefresh(void *L){(void)L;InterlockedIncrement64(&metrics[8].count);return 0;}
+__declspec(dllexport) int luaopen_InvalidatePlayerSnapshot(void *L){(void)L;snapshot_time=0;InterlockedIncrement64(&metrics[9].count);return 0;}
+
+
+static unsigned char gate_inner(void *controller,void *actor){
  unsigned char ready=((unsigned char(*)(void*))(game_base+0x44041c))(controller);
  if(ready)return ready;
  InterlockedIncrement64(&checks);
@@ -135,26 +165,40 @@ static unsigned char gate(void *controller,void *actor){
  double direction[3]={1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)};
  double length=*(float*)((unsigned char*)controller+8);
  if(!isfinite(length)||length<1||length>1000000)return 0;
- if(!intersects(transform+4,direction,length,p,radius+15,halfheight+15))return 0;
+ if(!intersects(transform+4,direction,length,p,radius+SAFETY_MARGIN_CM,halfheight+SAFETY_MARGIN_CM))return 0;
  unsigned char relation=((unsigned char(*)(void*,void*))(game_base+0x235809b))((void*)ng,(void*)pg);
  if(relation!=2&&relation!=3)return 0;
  InterlockedIncrement64(&blocked);return 1;
 }
-__declspec(dllexport) int luaopen_PlayerObstructionSnapshot(void *L){
- (void)L;if(!cave)return 0;
- FILE *f=fopen(snapshot_path,"r");unsigned long long address=0;double r=0,h=0;
- if(!f)return 0;int n=fscanf(f,"%llx %lf %lf",&address,&r,&h);fclose(f);
- snapshot_time=0;
- if(n!=3||r<1||r>200||h<r||h>300||!readable((uintptr_t)address,0x658))return 0;
+static unsigned char gate(void *controller,void *actor){ LONG64 t=stamp();unsigned char result=gate_inner(controller,actor);record_metric(5,t);return result;}
+// Fixed 24-nibble transaction: 64-bit address + two 16-bit dimensions in 0.01 cm units.
+__declspec(dllexport) int luaopen_BridgeReset(void *L){(void)L;bridge_address=bridge_dimensions=0;bridge_digits=0;bridge_thread=GetCurrentThreadId();return 0;}
+static int bridge_digit(unsigned digit){
+ if(GetCurrentThreadId()!=bridge_thread||bridge_digits>=24){bridge_digits=25;return 0;}
+ if(bridge_digits<16)bridge_address=(bridge_address<<4)|digit;
+ else bridge_dimensions=(bridge_dimensions<<4)|digit;
+ bridge_digits++;return 0;
+}
+#define DIGIT(name,value) __declspec(dllexport) int luaopen_Bridge##name(void *L){(void)L;return bridge_digit(value);}
+DIGIT(0,0) DIGIT(1,1) DIGIT(2,2) DIGIT(3,3) DIGIT(4,4) DIGIT(5,5) DIGIT(6,6) DIGIT(7,7)
+DIGIT(8,8) DIGIT(9,9) DIGIT(a,10) DIGIT(b,11) DIGIT(c,12) DIGIT(d,13) DIGIT(e,14) DIGIT(f,15)
+static int snapshot_inner(void *L){
+ (void)L;if(!cave)return 0;InterlockedIncrement64(&snapshot_attempts);
+ uint64_t address=bridge_address;double r=(bridge_dimensions>>16)/100.0,h=(bridge_dimensions&65535)/100.0;
+ unsigned digits=bridge_digits;bridge_digits=25;snapshot_time=0;
+ if(digits!=24||bridge_thread!=GetCurrentThreadId()||r<1||r>200||h<r||h>300||!readable((uintptr_t)address,0x658))return 0;
  int index=*(int*)((uintptr_t)address+12);uintptr_t item=object_item(index);
  if(!item||*(uintptr_t*)item!=(uintptr_t)address||(*(unsigned*)(item+8)&0x10200000))return 0;
  player_actor=(uintptr_t)address;player_index=index;player_serial=*(int*)(item+16);radius=r;halfheight=h;
- snapshot_thread=GetCurrentThreadId();snapshot_time=GetTickCount64();return 0;
+ snapshot_thread=GetCurrentThreadId();snapshot_time=GetTickCount64();InterlockedIncrement64(&snapshot_successes);return 0;
 }
+__declspec(dllexport) int luaopen_PlayerObstructionSnapshot(void *L){LONG64 t=stamp();int result=snapshot_inner(L);record_metric(6,t);return result;}
 __declspec(dllexport) int luaopen_PlayerObstructionHoldFire(void *L){
  (void)L;if(InterlockedCompareExchange(&once,1,0))return 0;
  GetModuleFileNameA(self,log_path,MAX_PATH);char *slash=strrchr(log_path,'\\');if(!slash)return 0;
- strcpy(slash+1,"PlayerObstructionHoldFire.log");strcpy(snapshot_path,log_path);strcpy(strrchr(snapshot_path,'\\')+1,"player_snapshot.txt");
+ strcpy(slash+1,"PlayerObstructionHoldFire.log");
+ QueryPerformanceFrequency(&perf_frequency);strcpy(metrics_path,log_path);strcpy(strrchr(metrics_path,'\\')+1,"baseline_metrics.csv");
+ FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,snapshot_age_ms\n");fclose(mf);}
  if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
  game_base=(uintptr_t)GetModuleHandleW(NULL);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
  if(memcmp(hook,expected_hook,8)){log_message("REFUSED: pre-shot instruction mismatch.");return 0;}
@@ -171,7 +215,18 @@ fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
 __declspec(dllexport) int luaopen_PlayerObstructionStatus(void *L){
- (void)L;if(cave){char s[320];snprintf(s,sizeof(s),"ACTIVE: checks=%lld withheld=%lld unavailable_player=%lld unsupported_aim=%lld snapshot_age_ms=%llu",checks,blocked,no_player,unsupported,(unsigned long long)(GetTickCount64()-snapshot_time));log_message(s);}return 0;
+ if(cave&&perf_frequency.QuadPart){
+  static const char *names[]={"lua_callback","controller_lookup","capsule_reads","snapshot_memory_transfer","queue_wait","native_gate_including_original","native_snapshot_commit","controller_cache_hits","controller_cache_refreshes","snapshot_invalidations"};
+  FILE *f=fopen(metrics_path,"a");if(f){
+   for(int i=0;i<10;i++)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,%llu\n",
+    (unsigned long long)GetTickCount64(),names[i],metrics[i].count,
+    (double)metrics[i].total*1e6/perf_frequency.QuadPart,(double)metrics[i].maximum*1e6/perf_frequency.QuadPart,
+    checks,blocked,snapshot_attempts,snapshot_successes,no_player,unsupported,(unsigned long long)(GetTickCount64()-snapshot_time));
+   fclose(f);
+  }
+ }
+
+ (void)L;if(cave){char s[512];snprintf(s,sizeof(s),"ACTIVE: version=0.2.3-cache-metrics margin_cm=40 system_uptime_ms=%llu snapshot_attempts=%lld snapshot_successes=%lld checks=%lld withheld=%lld unavailable_player=%lld unsupported_aim=%lld snapshot_age_ms=%llu",(unsigned long long)GetTickCount64(),snapshot_attempts,snapshot_successes,checks,blocked,no_player,unsupported,(unsigned long long)(GetTickCount64()-snapshot_time));log_message(s);}return 0;
 }
 BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID reserved){(void)reserved;if(why==DLL_PROCESS_ATTACH){self=h;DisableThreadLibraryCalls(h);}return TRUE;}
 #ifdef GEOMETRY_TEST
@@ -186,5 +241,18 @@ int main(void){
  p[0]=41;CHECK(0);p[0]=0;p[2]=-500;CHECK(0);
  p[2]=500;d[2]=-1;CHECK(0);d[2]=1;length=NAN;CHECK(0);
  printf("%d geometry scenarios passed\n",cases);return 0;
+}
+#endif
+
+#ifdef BRIDGE_TEST
+int main(void){
+ const char *payload="00007ff6123456780fa02328";
+ luaopen_BridgeReset(NULL);
+ for(int i=0;i<24;i++){unsigned d=payload[i]>='a'?payload[i]-'a'+10:payload[i]-'0';bridge_digit(d);}
+ if(bridge_digits!=24||bridge_address!=UINT64_C(0x00007ff612345678)||bridge_dimensions!=UINT64_C(0x0fa02328))return 1;
+ bridge_digit(0);if(bridge_digits!=25)return 2;
+ luaopen_BridgeReset(NULL);if(bridge_digits||bridge_address||bridge_dimensions)return 3;
+ bridge_thread=GetCurrentThreadId()+1;bridge_digit(0);if(bridge_digits!=25)return 4;
+ puts("Bridge encoding, reset, overflow and thread rejection passed");return 0;
 }
 #endif

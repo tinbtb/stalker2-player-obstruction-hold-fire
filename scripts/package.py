@@ -57,14 +57,15 @@ def main():
     entries = {
         'README.md': ROOT/'README.md',
         'LICENSE': ROOT/'LICENSE',
+        'BASELINE_CAPTURE.md': ROOT/'BASELINE_CAPTURE.md',
         prefix+'enabled.txt': ROOT/'mod/enabled.txt',
         prefix+'Scripts/main.lua': ROOT/'mod/Scripts/main.lua',
         prefix+'Scripts/PlayerObstructionHoldFire.dll': dll,
     }
     manifest = {
         'version': META['version'],
-        'package_binary': 'original-user-tested-binary' if original else 'source-rebuild',
-        'in_game_evidence': 'User reported successful behavior with original DLL; broad compatibility testing pending.',
+        'package_binary': 'user-tested-current-binary' if original else 'source-rebuild',
+        'in_game_evidence': 'Current diagnostic capture: 6289 accepted snapshots, 906 withheld attempts, zero unavailable-player/unsupported-aim checks. Controlled FPS validation pending.',
         'compiler_version': META['compiler'],
         'supported_game_sha256': META['game_sha256'],
         'unsupported_host_refusal': 'passed',

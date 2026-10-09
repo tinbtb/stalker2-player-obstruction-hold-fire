@@ -1,13 +1,11 @@
-## v0.2.0-testing — Windows x64 UE4SS test release
+v0.2.3-cache-metrics - Windows UE4SS testing release
 
-Neutral/Friendly NPCs hold fire when the player intersects their current aim line, and can resume when the player moves aside. The initial tester reports successful in-game behavior. Wider testing is welcome.
+- Increase capsule safety margin from 15 to 40 cm on radius and half-height.
+- Replace recurring snapshot file I/O with an in-memory bridge.
+- Cache and validate the controller, refresh every 100 uses, and read current pawn/component references each update.
+- Invalidate native snapshots immediately when objects are missing or callbacks fail.
+- Include cumulative performance metrics and capture instructions; instrumentation remains enabled.
 
-**Download `PlayerObstructionHoldFire_v0.2.0-testing_UE4SS.zip`**, then extract it into `Stalker2/Binaries/Win64`, merging with your existing `ue4ss` directory. Compatible UE4SS must already be installed; no compiler or Python is needed to play. Do not use the automatic source archives as the installation package.
+The release ZIP uses the exact DLL and Lua script from the latest in-game capture: 6,289 accepted snapshots, 906 withheld attempts, no unavailable-player/unsupported-aim checks. Average callback duration in separate captures decreased from 1,166 to 81 microseconds; this is not a controlled FPS benchmark.
 
-The ZIP includes the original successfully tested DLL, Lua bridge, enabled marker, installation instructions, MIT license, and a verification manifest. `SHA256SUMS.txt` contains the ZIP checksum. Source and the pinned Windows builder are in the repository; CI also builds the same source separately.
-
-Supports only executable SHA256 `61bc1e030740cebc30cf1dad0c86cf65e39e12ff0500225821d684181e08d56b` (174798384 bytes). Other builds refuse to activate. No executable files are changed on disk.
-
-Known limits: weapon range is used rather than target distance; the mod can pause shots when you stand behind a target or behind cover. Random spread, ricochets, already-fired bullets and explosives are not covered. See README for the status counters and testing checklist. Disable the earlier damage-blocking mod/PAK for a clean test. Restart required to uninstall.
-
-The DLL is unsigned. These are experimental mod files, with one successful user testing report rather than broad compatibility certification.
+Requires the executable fingerprint documented in README and an existing UE4SS installation. Close the game and replace both Lua and DLL. Do not hot reload. No loader or game binaries are bundled.

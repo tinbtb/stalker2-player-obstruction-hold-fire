@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0-testing",
+  "version": "0.2.3-cache-metrics",
   "compiler": "0.15.2",
-  "tested_dll_sha256": "5f58fba6f4cfaac2a78f08b58ee9719190ffe8ed6df48b5471e6bffd7cd970c3",
+  "tested_dll_sha256": "bae12c0b3b9864e4079770bf7429129c1651151bde5a56bed0cbb8d7b4e232c7",
   "game_sha256": "61bc1e030740cebc30cf1dad0c86cf65e39e12ff0500225821d684181e08d56b"
 }

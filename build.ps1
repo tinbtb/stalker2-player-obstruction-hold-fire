@@ -17,5 +17,10 @@ $test = Join-Path $build 'geometry-test.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Geometry test build failed' }
 & $test
 if ($LASTEXITCODE -ne 0) { throw 'Geometry tests failed' }
+$bridgeTest = Join-Path $build 'bridge-test.exe'
+& $ZigPath cc -target x86_64-windows-gnu -O2 -DBRIDGE_TEST $source -lbcrypt -o $bridgeTest
+if ($LASTEXITCODE -ne 0) { throw 'Bridge test build failed' }
+& $bridgeTest
+if ($LASTEXITCODE -ne 0) { throw 'Bridge tests failed' }
 & $Python (Join-Path $root 'scripts\package.py')
 if ($LASTEXITCODE -ne 0) { throw 'Verification/packaging failed' }

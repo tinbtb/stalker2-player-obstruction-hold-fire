@@ -4,11 +4,11 @@ An experimental Windows x64 UE4SS mod that asks Neutral and Friendly NPCs to hol
 
 **AI-generated code:** The native C code, Lua bridge, and build/packaging scripts were generated using AI (OpenAI Codex), under the author's direction. The author has personally tested the mod in-game.
 
-The first tester reports that this version works well in-game. Wider compatibility testing is still needed. Withholding a shot prevents creation of that bullet, which should also prevent its bleeding and armor-wear effects; this does not protect against other sources of damage.
+The author has tested the current diagnostic build in-game. Its capture recorded 6,289 accepted snapshots and 906 withheld shot attempts, with no unavailable-player or unsupported-aim gate checks. Wider compatibility testing is still needed. Withholding a shot prevents creation of that bullet, which should also prevent its bleeding and armor-wear effects; this does not protect against other sources of damage.
 
 ## Download and install
 
-Download **PlayerObstructionHoldFire_v0.2.0-testing_UE4SS.zip** from [Releases](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases). GitHub's automatic "Source code" archives contain source, not a ready-to-play DLL.
+Download **PlayerObstructionHoldFire_v0.2.3-cache-metrics_UE4SS.zip** from [Releases](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases). GitHub's automatic "Source code" archives contain source, not a ready-to-play DLL.
 
 1. Close the game completely.
 2. Install UE4SS if you do not already use it. **I (tinbtb) personally use the UE4SS build supplied by [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/), and that is the setup I tested this mod with.** Follow Ultra+ Manager's installation instructions for S.T.A.L.K.E.R. 2. If you already have its UE4SS build installed, keep that installation. The tested build identifies itself as UE4SS 3.0.1 Beta #0, Git revision `44afb36d`, on UE 5.5. [Other UE4SS builds](https://github.com/UE4SS-RE/RE-UE4SS/releases) have not been validated here. This mod needs `package.loadlib`, `LoopAsync`, and `ExecuteInGameThread`.
@@ -40,7 +40,7 @@ Open `ue4ss/Mods/PlayerObstructionHoldFire/Scripts/PlayerObstructionHoldFire.log
 | `unsupported_aim` | Shooter has an aim routine this release does not recognize |
 | `snapshot_age_ms` | Time since the last player snapshot |
 
-Counters normally refresh about every five seconds while player snapshots succeed. Snapshot errors appear in `UE4SS.log`. Zero checks may mean the weapon does not use this path. If the log says `REFUSED`, include its full text in a bug report.
+Counters normally refresh every 100 completed callbacks (approximately five seconds). Snapshot errors appear in `UE4SS.log`. Zero checks may mean the weapon does not use this path. If the log says `REFUSED`, include its full text in a bug report.
 
 ## Test and report
 
@@ -53,7 +53,7 @@ Report the game executable SHA256, UE4SS version, other combat mods, the native 
 - The check uses the current central aim line and **weapon range**, not the intended target distance or world occlusion. It can withhold fire if the player stands behind the target or behind cover.
 - Random spread, already-fired bullets, ricochets, grenades, and moving into a bullet are not covered.
 - Only the identified pre-shot path and NPC aim implementation are covered. Unknown paths are allowed to proceed.
-- Player identity and scaled capsule dimensions refresh on the game thread every 50 ms through a small local snapshot file. Snapshots older than 250 ms are ignored. The native hook reads the current player position and adds a 15 cm safety margin.
+- Player identity and scaled capsule dimensions refresh on the game thread every 50 ms through an in-memory callback bridge. Snapshots older than 250 ms are ignored. The native hook reads the current player position and adds a 40 cm safety margin to both capsule radius and half-height.
 - Missing, stale, or unsupported inputs leave the game's original firing behavior in place.
 - The DLL is unsigned. Publishing source and checksums enables inspection and integrity checks; neither is a guarantee of safety.
 
@@ -70,13 +70,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\get-zig.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-You may supply your own Zig 0.15.2 compiler with `-ZigPath C:\path\to\zig.exe` to `build.ps1`. Build outputs and the testing ZIP are placed in `build/` and `dist/`. The build runs 16 capsule-intersection cases and checks that the DLL refuses an unsupported host before packaging. Optional exact-executable validation:
+You may supply your own Zig 0.15.2 compiler with `-ZigPath C:\path\to\zig.exe` to `build.ps1`. Build outputs and the testing ZIP are placed in `build/` and `dist/`. The build runs bridge transaction checks and 16 capsule-intersection cases and checks that the DLL refuses an unsupported host before packaging. Optional exact-executable validation:
 
 ```powershell
 python .\scripts\package.py --game-exe "C:\path\to\Stalker2-Win64-Shipping.exe"
 ```
 
-The source DLL code and Lua script in v0.2.0-testing are byte-for-byte copies of the implementation that received the successful in-game report. Its initial release ZIP contains that original tested DLL. The public builder and CI compile the same source with the same compiler version and optimization flags. PE metadata and build paths can make rebuilt DLL hashes differ; bit-identical builds are not claimed. `verification.json` records file hashes and whether the package uses the original tested binary or a rebuild. `SHA256SUMS.txt` lets you check the downloaded ZIP with `Get-FileHash -Algorithm SHA256`.
+The v0.2.3-cache-metrics release ZIP contains the exact DLL and Lua script used for the author's latest diagnostic capture. CI separately rebuilds the source. PE metadata and build paths can make rebuilt DLL hashes differ; bit-identical builds are not claimed. `verification.json` records file hashes and binary provenance. `SHA256SUMS.txt` lets you check the downloaded ZIP with `Get-FileHash -Algorithm SHA256`.
 
 GitHub Actions also builds the source on a Windows runner and uploads its separately identified CI artifacts. A successful build does not replace in-game testing.
 
@@ -85,3 +85,13 @@ GitHub Actions also builds the source on a Windows runner and uploads its separa
 [Native source](src/PlayerObstructionHoldFire.c) contains the game-build fingerprint, hook installer, original readiness call, aim/capsule check, and native relation query. [Lua bridge](mod/Scripts/main.lua) updates player identity/capsule dimensions on the game thread. [Technical notes](TECHNICAL.md) document the exact offsets and validation boundary.
 
 MIT licensed. No game binaries, extracted game assets, compiler distribution, or third-party loader binaries are included.
+
+Diagnostic status is overwritten approximately every five seconds in `Scripts/PlayerObstructionHoldFire.log`. It includes version, safety margin, system uptime, snapshot attempts/successes, gate checks, shots withheld, unavailable-player checks, unsupported aim and snapshot age. Counters are cumulative; take differences between samples to calculate rates. No per-shot logging is added. The existing 50 ms snapshot loop is unchanged for baseline comparison.
+
+## Diagnostic release and performance evidence
+
+This release retains timing instrumentation and writes cumulative summaries to `Scripts/baseline_metrics.csv`. The CSV resets on activation; preserve it before restarting. See [capture instructions](BASELINE_CAPTURE.md). No logs or measurements are uploaded automatically.
+
+Compared with earlier captures, average Lua callback duration fell from 1,166 microseconds (disk bridge) to 278 microseconds (memory bridge) to 81 microseconds (controller cache). These were different gameplay runs with instrumentation, not controlled FPS benchmarks; an FPS improvement has not been established. The controller cache is validated every callback and refreshed every 100 uses. Pawn/component references are read anew, and missing objects or callback errors immediately invalidate the native snapshot. No UObjectCacheMod dependency is introduced.
+
+The 40 cm margin is larger than the original release's 15 cm margin and can withhold more shots near the player. No movement prediction is included.
