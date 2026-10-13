@@ -14,3 +14,7 @@ Experimental exact-build release. Derived native code has in-game enabled/contro
 measurements; release diagnostic-default changes are synthetic/smoke tested. The
 uncapped comparison used different NPC counts, so no matched FPS claim is made.
 Game-thread capture does not measure displayed frames or GPU time.
+
+Packaging correction: both ZIPs now contain root-level files only, including the
+ASI, INI, README and optional winhttp.dll, for Vortex installation. The ASI and
+loader binaries are unchanged.

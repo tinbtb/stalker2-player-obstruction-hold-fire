@@ -17,7 +17,7 @@ builds were tested in-game; this release is experimental. UE4SS is not required.
 For other mods, the author uses its build from [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
 **Install:** close the game and disable old ASI/UE4SS copies of this mod. Extract
-`scripts/` into `Stalker2/Binaries/Win64`. The with-loader ZIP includes optional
+the root-level files into `Stalker2/Binaries/Win64`. The with-loader ZIP includes optional
 Ultimate ASI Loader 9.7.4 x64 as `winhttp.dll`: put it in Win64 only if that file
 is absent. **Do not overwrite existing proxy DLLs.** Any compatible x64 ASI loader
 may be used; place ASI and INI together in its plugin folder. An ASI-only ZIP is
@@ -32,7 +32,7 @@ Diagnostics are **off by default**. Preserve logs before another diagnostic run.
 The startup log should say ACTIVE; REFUSED means incompatible EXE/conflict.
 In-flight bullets, wider dispersion and other damage can still hurt you. Invalid
 data permits the original shot. To uninstall, close the game and remove ASI/INI;
-remove the optional loader only if no other mod needs it. Loader license: `licenses/`.
+remove the optional loader only if no other mod needs it. Loader license: `Ultimate-ASI-Loader-LICENSE.txt`.
 
 ## Українська
 
@@ -43,7 +43,7 @@ remove the optional loader only if no other mod needs it. Loader license: `licen
 з [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
 **Встановлення:** закрийте гру й вимкніть старі ASI/UE4SS-копії цього моду.
-Розпакуйте `scripts/` у `Stalker2/Binaries/Win64`. Архів із завантажувачем містить
+Розпакуйте файли з кореня архіву у `Stalker2/Binaries/Win64`. Архів із завантажувачем містить
 необов'язковий Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: додайте його у Win64,
 лише якщо такого файлу немає. **Не замінюйте наявні проксі-DLL.** Можна використати
 будь-який сумісний x64 ASI-завантажувач; покладіть ASI та INI разом у його теку
@@ -58,7 +58,7 @@ remove the optional loader only if no other mod needs it. Loader license: `licen
 У стартовому журналі має бути ACTIVE; REFUSED означає несумісний EXE або конфлікт.
 Кулі в польоті, більший розкид та інша шкода залишаються небезпечними. Некоректні
 дані дозволяють звичайний постріл. Для видалення закрийте гру й видаліть ASI/INI;
-завантажувач видаляйте лише якщо він не потрібен іншим модам. Ліцензія — у `licenses/`.
+завантажувач видаляйте лише якщо він не потрібен іншим модам. Ліцензія — `Ultimate-ASI-Loader-LICENSE.txt`.
 
 ## Русский
 
@@ -69,7 +69,7 @@ remove the optional loader only if no other mod needs it. Loader license: `licen
 из [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
 **Установка:** закройте игру и отключите старые ASI/UE4SS-копии этого мода.
-Распакуйте `scripts/` в `Stalker2/Binaries/Win64`. Архив с загрузчиком включает
+Распакуйте файлы из корня архива в `Stalker2/Binaries/Win64`. Архив с загрузчиком включает
 необязательный Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: добавьте его в Win64,
 только если такого файла нет. **Не заменяйте существующие прокси-DLL.** Можно
 использовать любой совместимый x64 ASI-загрузчик; разместите ASI и INI вместе в его
@@ -85,7 +85,7 @@ remove the optional loader only if no other mod needs it. Loader license: `licen
 В стартовом журнале должно быть ACTIVE; REFUSED означает несовместимый EXE или
 конфликт. Летящие пули, больший разброс и другой урон остаются опасными. Некорректные
 данные разрешают обычный выстрел. Для удаления закройте игру и удалите ASI/INI;
-загрузчик удаляйте только если он не нужен другим модам. Лицензия — в `licenses/`.
+загрузчик удаляйте только если он не нужен другим модам. Лицензия — `Ultimate-ASI-Loader-LICENSE.txt`.
 
 ## EXE / SHA-256
 
