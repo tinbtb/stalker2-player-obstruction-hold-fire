@@ -1,4 +1,4 @@
-# Player Obstruction Hold Fire — v0.4.0-testing
+# Player Obstruction Hold Fire — v0.4.1-testing
 
 [Releases / Завантаження / Скачать](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases)
 
@@ -16,8 +16,7 @@ Neutral/friendly NPCs hold fire when you obstruct their predicted shot (capsule 
 builds were tested in-game; this release is experimental. UE4SS is not required.
 For other mods, the author uses its build from [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
-**Install:** close the game and disable old ASI/UE4SS copies of this mod. Extract
-the root-level files into `Stalker2/Binaries/Win64`. The with-loader ZIP includes optional
+**Install:** close the game and disable old ASI/UE4SS copies of this mod. Copy the ASI, INI and README into `Stalker2/Binaries/Win64`. The with-loader ZIP includes optional
 Ultimate ASI Loader 9.7.4 x64 as `winhttp.dll`: put it in Win64 only if that file
 is absent. **Do not overwrite existing proxy DLLs.** Any compatible x64 ASI loader
 may be used; place ASI and INI together in its plugin folder. An ASI-only ZIP is
@@ -43,7 +42,7 @@ remove the optional loader only if no other mod needs it. Loader license: `Ultim
 з [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
 **Встановлення:** закрийте гру й вимкніть старі ASI/UE4SS-копії цього моду.
-Розпакуйте файли з кореня архіву у `Stalker2/Binaries/Win64`. Архів із завантажувачем містить
+Скопіюйте ASI, INI та README у `Stalker2/Binaries/Win64`. Архів із завантажувачем містить
 необов'язковий Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: додайте його у Win64,
 лише якщо такого файлу немає. **Не замінюйте наявні проксі-DLL.** Можна використати
 будь-який сумісний x64 ASI-завантажувач; покладіть ASI та INI разом у його теку
@@ -69,7 +68,7 @@ remove the optional loader only if no other mod needs it. Loader license: `Ultim
 из [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
 **Установка:** закройте игру и отключите старые ASI/UE4SS-копии этого мода.
-Распакуйте файлы из корня архива в `Stalker2/Binaries/Win64`. Архив с загрузчиком включает
+Скопируйте ASI, INI и README в `Stalker2/Binaries/Win64`. Архив с загрузчиком включает
 необязательный Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: добавьте его в Win64,
 только если такого файла нет. **Не заменяйте существующие прокси-DLL.** Можно
 использовать любой совместимый x64 ASI-загрузчик; разместите ASI и INI вместе в его

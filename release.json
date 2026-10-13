@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0-testing",
+  "version": "0.4.1-testing",
   "compiler": "0.15.2",
   "game_sha256": "61bc1e030740cebc30cf1dad0c86cf65e39e12ff0500225821d684181e08d56b",
   "loader_version": "9.7.4",

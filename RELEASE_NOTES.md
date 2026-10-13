@@ -1,4 +1,4 @@
-# v0.4.0-testing - Native ASI with optional diagnostics
+# v0.4.1-testing - Flat ZIPs for Vortex
 
 Native ASI replaces this mod's UE4SS/Lua dependency. Neutral/Friendly NPCs withhold
 shots when the predicted path intersects the player capsule plus a 40 cm margin.
