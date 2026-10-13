@@ -9,6 +9,8 @@
 // This is an exact-build proof of concept; no Unreal SDK or Lua ABI imports.
 static HMODULE self;
 static volatile LONG once;
+static int worker_ready,hold_fire_enabled=1,metrics_enabled,frames_requested;
+#define COUNT(counter) do{if(metrics_enabled)InterlockedIncrement64(&(counter));}while(0)
 static unsigned char *cave;
 static char log_path[MAX_PATH];
 static const unsigned char expected_hook[8]={0xe8,0x9b,0x3d,0xe3,0xff,0x84,0xc0,0x75};
@@ -50,7 +52,7 @@ static void release_threads(unsigned suspended){
  for(unsigned i=0;i<suspended;i++)ResumeThread(threads[i]);
  for(unsigned i=0;i<count;i++)CloseHandle(threads[i]);count=0;
 }
-static int patch_safely(unsigned char *hook,const unsigned char *patch){
+static int patch_safely(unsigned char *hook,const unsigned char *patch,const unsigned char *expected){
  HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);if(snap==INVALID_HANDLE_VALUE)return 0;
  THREADENTRY32 te;te.dwSize=sizeof(te);int valid=1;
  if(!Thread32First(snap,&te)){CloseHandle(snap);return 0;}
@@ -69,37 +71,64 @@ static int patch_safely(unsigned char *hook,const unsigned char *patch){
   }
  }
  DWORD old;int ok=0;
- if(!memcmp(hook,expected_hook,8)&&VirtualProtect(hook,8,PAGE_EXECUTE_READWRITE,&old)){
+ if(!memcmp(hook,expected,8)&&VirtualProtect(hook,8,PAGE_EXECUTE_READWRITE,&old)){
   memcpy(hook,patch,8);FlushInstructionCache(GetCurrentProcess(),hook,8);
   DWORD ignored;if(VirtualProtect(hook,8,old,&ignored))ok=1;
-  else{memcpy(hook,expected_hook,8);FlushInstructionCache(GetCurrentProcess(),hook,8);VirtualProtect(hook,8,old,&ignored);}
+  else{memcpy(hook,expected,8);FlushInstructionCache(GetCurrentProcess(),hook,8);VirtualProtect(hook,8,old,&ignored);}
  }
  release_threads(suspended);return ok;
 }
 #include <math.h>
 static uintptr_t game_base, player_actor;
-static DWORD snapshot_thread;
-static ULONGLONG snapshot_time;
-static int player_index, player_serial;
+static volatile LONG gate_thread;
+
+static double player_position[3];
 static double radius, halfheight;
-static uint64_t bridge_address, bridge_dimensions;
-static unsigned bridge_digits;
-static DWORD bridge_thread;
 static volatile LONG64 checks, blocked, no_player, unsupported;
 static volatile LONG64 snapshot_attempts, snapshot_successes;
 #define SAFETY_MARGIN_CM 40.0
-static int readable(uintptr_t p,size_t n){
- MEMORY_BASIC_INFORMATION m;
- if(!p||!VirtualQuery((void*)p,&m,sizeof(m)))return 0;
- return m.State==MEM_COMMIT && !(m.Protect&(PAGE_GUARD|PAGE_NOACCESS)) && p+n>=p && p+n<=(uintptr_t)m.BaseAddress+m.RegionSize;
+// SEH covers only our byte loads, never game engine calls. No mapped-region cache.
+static volatile LONG64 guarded_reads, read_faults, guard_rearms;
+static int read_exception(EXCEPTION_POINTERS *e,uintptr_t source,size_t size){
+ EXCEPTION_RECORD *r=e->ExceptionRecord;
+ if(r->NumberParameters<2 || r->ExceptionInformation[0]!=0 ||
+    r->ExceptionInformation[1]<source || r->ExceptionInformation[1]-source>=size)
+  return EXCEPTION_CONTINUE_SEARCH;
+ if(r->ExceptionCode==EXCEPTION_GUARD_PAGE){
+  // A guard access clears PAGE_GUARD. Restore it before abandoning our read.
+  MEMORY_BASIC_INFORMATION m;DWORD old;
+  uintptr_t page=r->ExceptionInformation[1]&~(uintptr_t)4095;
+  if(!VirtualQuery((void*)page,&m,sizeof(m)) ||
+     !VirtualProtect((void*)page,4096,m.Protect|PAGE_GUARD,&old))return EXCEPTION_CONTINUE_SEARCH;
+  COUNT(guard_rearms);
+ }else if(r->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION && r->ExceptionCode!=EXCEPTION_IN_PAGE_ERROR)
+  return EXCEPTION_CONTINUE_SEARCH;
+ return EXCEPTION_EXECUTE_HANDLER;
 }
+// Keep the faulting loads in a non-inlined callee so Clang emits an SEH invoke.
+__declspec(noinline) static void copy_bytes(void *destination,uintptr_t source,size_t size){
+ volatile const unsigned char *p=(volatile const unsigned char*)source;
+ unsigned char *q=(unsigned char*)destination;
+ for(size_t i=0;i<size;i++)q[i]=p[i];
+}
+__declspec(noinline) static int safe_copy(void *destination,uintptr_t source,size_t size){
+ COUNT(guarded_reads);
+ if(!source || size>UINTPTR_MAX-source){COUNT(read_faults);return 0;}
+ __try {
+  copy_bytes(destination,source,size);
+ } __except(read_exception(GetExceptionInformation(),source,size)) {
+  COUNT(read_faults);return 0;
+ }
+ return 1;
+}
+#define COPY_AT(dst, address) safe_copy(&(dst),(uintptr_t)(address),sizeof(dst))
 static uintptr_t object_item(int index){
- if(index<0||index>=*(int*)(game_base+0xa0e68e4))return 0;
- uintptr_t chunks=*(uintptr_t*)(game_base+0xa0e68d0);
- if(!readable(chunks+(unsigned)(index>>16)*8,8))return 0;
- uintptr_t chunk=*(uintptr_t*)(chunks+(unsigned)(index>>16)*8);
- uintptr_t item=chunk+(index&65535)*24;
- return readable(item,24)?item:0;
+ int count;uintptr_t chunks,chunk;
+ if(!COPY_AT(count,game_base+0xa0e68e4)||index<0||index>=count)return 0;
+ if(!COPY_AT(chunks,game_base+0xa0e68d0)||!chunks)return 0;
+ if(!COPY_AT(chunk,chunks+(unsigned)(index>>16)*8)||!chunk)return 0;
+ uintptr_t offset=(uintptr_t)(index&65535)*24;
+ return chunk<=UINTPTR_MAX-offset?chunk+offset:0;
 }
 // Exact distance from a segment to the capsule's vertical center segment.
 static double clamp01(double x){return x<0?0:x>1?1:x;}
@@ -120,87 +149,113 @@ static int intersects(const double o[3],const double d[3],double length,const do
 typedef struct { volatile LONG64 count, total, maximum; } Metric;
 static Metric metrics[10];
 static LARGE_INTEGER perf_frequency;
-static LONG64 starts[8];
+
 static char metrics_path[MAX_PATH];
 static LONG64 stamp(void){ LARGE_INTEGER t;QueryPerformanceCounter(&t);return t.QuadPart; }
+static LONG64 metric_stamp(void){return metrics_enabled?stamp():0;}
 static void record_metric(int i,LONG64 start){
+ if(!metrics_enabled)return;
  LONG64 dt=stamp()-start,old;InterlockedIncrement64(&metrics[i].count);
  InterlockedAdd64(&metrics[i].total,dt);
  do{old=metrics[i].maximum;if(dt<=old)break;}while(InterlockedCompareExchange64(&metrics[i].maximum,dt,old)!=old);
 }
-#define MARKERS(name,index) \
-__declspec(dllexport) int luaopen_MetricBegin##name(void *L){(void)L;starts[index]=stamp();return 0;} \
-__declspec(dllexport) int luaopen_MetricEnd##name(void *L){(void)L;record_metric(index,starts[index]);return 0;}
-MARKERS(Callback,0)
-MARKERS(Lookup,1)
-MARKERS(Capsule,2)
-MARKERS(Write,3)
-MARKERS(Queue,4)
-__declspec(dllexport) int luaopen_ControllerCacheHit(void *L){(void)L;InterlockedIncrement64(&metrics[7].count);return 0;}
-__declspec(dllexport) int luaopen_ControllerCacheRefresh(void *L){(void)L;InterlockedIncrement64(&metrics[8].count);return 0;}
-__declspec(dllexport) int luaopen_InvalidatePlayerSnapshot(void *L){(void)L;snapshot_time=0;InterlockedIncrement64(&metrics[9].count);return 0;}
-
-
+// UObject identity is checked on the firing thread before each use. No persistent pawn cache.
+static int valid_object(uintptr_t obj,size_t size){
+ int index;uintptr_t pointer;unsigned flags;
+ if(!obj || size>UINTPTR_MAX-obj || !COPY_AT(index,obj+12))return 0;
+ uintptr_t item=object_item(index);
+ return item && COPY_AT(pointer,item) && pointer==obj &&
+  COPY_AT(flags,item+8) && !(flags&0x10200000);
+}
+static uintptr_t (*get_controller)(void*,int);
+static uintptr_t (*get_pawn)(void*);
+static int native_player(void *actor){
+ COUNT(snapshot_attempts);
+ uintptr_t npc=(uintptr_t)actor,vt,world_getter;
+ if(!valid_object(npc,0x658)||!COPY_AT(vt,npc)||!vt||
+    !COPY_AT(world_getter,vt+0x198)||!world_getter)return 0;
+ LONG64 t=metric_stamp();uintptr_t pc=get_controller(actor,0);record_metric(7,t);
+ if(!valid_object(pc,0x6e0))return 0;
+ t=metric_stamp();uintptr_t pawn=get_pawn((void*)pc);record_metric(8,t);
+ if(!valid_object(pawn,0x658))return 0;
+ uintptr_t pg;unsigned player_id,pg_id;
+ if(!COPY_AT(pg,pawn+0x650)||!pg||!COPY_AT(pg_id,pg+16)||
+    !COPY_AT(player_id,game_base+0x9eec140)||pg_id!=player_id)return 0;
+ uintptr_t cls,capsule,actual_cls;
+ if(!COPY_AT(cls,game_base+0xa234940)||!cls)return 0;
+ if(!COPY_AT(capsule,pawn+0x340))return 0;
+ if(!valid_object(capsule,0x510)||!COPY_AT(actual_cls,capsule+0x10)||actual_cls!=cls){
+  if(!COPY_AT(capsule,pawn+0x1c0)||!valid_object(capsule,0x510)||
+     !COPY_AT(actual_cls,capsule+0x10)||actual_cls!=cls)return 0;
+ }
+ double scale[3],position[3];float dimensions[2];
+ if(!COPY_AT(scale,capsule+0x210)||!COPY_AT(dimensions,capsule+0x508)||
+    !COPY_AT(position,capsule+0x1f0))return 0;
+ double r=(float)(scale[0]<scale[1]?scale[0]:scale[1])*dimensions[1];
+ double h=(float)scale[2]*dimensions[0];
+ if(!isfinite(r)||!isfinite(h)||r<1||r>200||h<r||h>300)return 0;
+ for(int i=0;i<3;i++)if(!isfinite(position[i]))return 0;
+ memcpy(player_position,position,sizeof(position));player_actor=pawn;radius=r;halfheight=h;
+ COUNT(snapshot_successes);return 1;
+}
 static unsigned char gate_inner(void *controller,void *actor){
  unsigned char ready=((unsigned char(*)(void*))(game_base+0x44041c))(controller);
  if(ready)return ready;
- InterlockedIncrement64(&checks);
- if(snapshot_thread!=GetCurrentThreadId() || GetTickCount64()-snapshot_time>250){InterlockedIncrement64(&no_player);return 0;}
- uintptr_t item=object_item(player_index);
- if(!item||*(uintptr_t*)item!=player_actor||*(int*)(item+16)!=player_serial||(*(unsigned*)(item+8)&0x10200000)){InterlockedIncrement64(&no_player);return 0;}
- uintptr_t npc=(uintptr_t)actor;
- if(npc==player_actor||!readable(npc,0x658)||!readable(player_actor,0x658))return 0;
- uintptr_t ng=*(uintptr_t*)(npc+0x650),pg=*(uintptr_t*)(player_actor+0x650);
- if(!readable(ng,24)||!readable(pg,24)||*(unsigned*)(pg+16)!=*(unsigned*)(game_base+0x9eec140)||*(unsigned*)(ng+16)==*(unsigned*)(game_base+0x9eec140))return 0;
- uintptr_t vt=*(uintptr_t*)npc;
- if(!readable(vt+0xaa0,8)||*(uintptr_t*)(vt+0xaa0)!=game_base+0xa66c56){InterlockedIncrement64(&unsupported);return 0;}
- uintptr_t root=*(uintptr_t*)(player_actor+0x1c0);
- if(!readable(root+0x1f0,24))return 0;
- double p[3];memcpy(p,(void*)(root+0x1f0),24);
+ COUNT(checks);
+ LONG tid=(LONG)GetCurrentThreadId();
+ LONG owner=InterlockedCompareExchange(&gate_thread,tid,0);
+ if(owner && owner!=tid){COUNT(no_player);return 0;}
+ LONG64 lookup_start=metric_stamp();int found=native_player(actor);record_metric(0,lookup_start);
+ if(!found){COUNT(no_player);return 0;}
+ uintptr_t npc=(uintptr_t)actor,ng,pg,vt,aim;unsigned ng_id,pg_id,player_id;
+ if(npc==player_actor)return 0;
+ if(!COPY_AT(ng,npc+0x650)||!ng||!COPY_AT(pg,player_actor+0x650)||!pg||
+    !COPY_AT(ng_id,ng+16)||!COPY_AT(pg_id,pg+16)||!COPY_AT(player_id,game_base+0x9eec140)||
+    pg_id!=player_id||ng_id==player_id)return 0;
+ if(!COPY_AT(vt,npc)||!vt||!COPY_AT(aim,vt+0xaa0)||aim!=game_base+0xa66c56){
+  COUNT(unsupported);return 0;
+ }
+ unsigned char aim_mode;float shot_length;
+ if(!COPY_AT(aim_mode,(uintptr_t)controller+0x10)||!COPY_AT(shot_length,(uintptr_t)controller+8))return 0;
+ double p[3];memcpy(p,player_position,24);
  _Alignas(16) double transform[12]={0};
- ((void*(*)(void*,void*,unsigned char))(game_base+0xa66c56))(actor,transform,*((unsigned char*)controller+0x10));
+ LONG64 aim_start=metric_stamp();
+ ((void*(*)(void*,void*,unsigned char))(game_base+0xa66c56))(actor,transform,aim_mode);
+ record_metric(1,aim_start);
  double x=transform[0],y=transform[1],z=transform[2],w=transform[3];
  double norm=x*x+y*y+z*z+w*w;
  if(!isfinite(norm)||fabs(norm-1)>0.02)return 0;
  double direction[3]={1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)};
- double length=*(float*)((unsigned char*)controller+8);
+ double length=shot_length;
  if(!isfinite(length)||length<1||length>1000000)return 0;
  if(!intersects(transform+4,direction,length,p,radius+SAFETY_MARGIN_CM,halfheight+SAFETY_MARGIN_CM))return 0;
+ LONG64 relation_start=metric_stamp();
  unsigned char relation=((unsigned char(*)(void*,void*))(game_base+0x235809b))((void*)ng,(void*)pg);
+ record_metric(2,relation_start);
  if(relation!=2&&relation!=3)return 0;
- InterlockedIncrement64(&blocked);return 1;
+ COUNT(blocked);return 1;
 }
-static unsigned char gate(void *controller,void *actor){ LONG64 t=stamp();unsigned char result=gate_inner(controller,actor);record_metric(5,t);return result;}
-// Fixed 24-nibble transaction: 64-bit address + two 16-bit dimensions in 0.01 cm units.
-__declspec(dllexport) int luaopen_BridgeReset(void *L){(void)L;bridge_address=bridge_dimensions=0;bridge_digits=0;bridge_thread=GetCurrentThreadId();return 0;}
-static int bridge_digit(unsigned digit){
- if(GetCurrentThreadId()!=bridge_thread||bridge_digits>=24){bridge_digits=25;return 0;}
- if(bridge_digits<16)bridge_address=(bridge_address<<4)|digit;
- else bridge_dimensions=(bridge_dimensions<<4)|digit;
- bridge_digits++;return 0;
-}
-#define DIGIT(name,value) __declspec(dllexport) int luaopen_Bridge##name(void *L){(void)L;return bridge_digit(value);}
-DIGIT(0,0) DIGIT(1,1) DIGIT(2,2) DIGIT(3,3) DIGIT(4,4) DIGIT(5,5) DIGIT(6,6) DIGIT(7,7)
-DIGIT(8,8) DIGIT(9,9) DIGIT(a,10) DIGIT(b,11) DIGIT(c,12) DIGIT(d,13) DIGIT(e,14) DIGIT(f,15)
-static int snapshot_inner(void *L){
- (void)L;if(!cave)return 0;InterlockedIncrement64(&snapshot_attempts);
- uint64_t address=bridge_address;double r=(bridge_dimensions>>16)/100.0,h=(bridge_dimensions&65535)/100.0;
- unsigned digits=bridge_digits;bridge_digits=25;snapshot_time=0;
- if(digits!=24||bridge_thread!=GetCurrentThreadId()||r<1||r>200||h<r||h>300||!readable((uintptr_t)address,0x658))return 0;
- int index=*(int*)((uintptr_t)address+12);uintptr_t item=object_item(index);
- if(!item||*(uintptr_t*)item!=(uintptr_t)address||(*(unsigned*)(item+8)&0x10200000))return 0;
- player_actor=(uintptr_t)address;player_index=index;player_serial=*(int*)(item+16);radius=r;halfheight=h;
- snapshot_thread=GetCurrentThreadId();snapshot_time=GetTickCount64();InterlockedIncrement64(&snapshot_successes);return 0;
-}
-__declspec(dllexport) int luaopen_PlayerObstructionSnapshot(void *L){LONG64 t=stamp();int result=snapshot_inner(L);record_metric(6,t);return result;}
-__declspec(dllexport) int luaopen_PlayerObstructionHoldFire(void *L){
+static unsigned char gate(void *controller,void *actor){ LONG64 t=metric_stamp();unsigned char result=gate_inner(controller,actor);record_metric(5,t);return result;}
+#ifdef FRAME_CAPTURE
+#include "frame_capture.h"
+#endif
+static int initialize(void *L){
  (void)L;if(InterlockedCompareExchange(&once,1,0))return 0;
  GetModuleFileNameA(self,log_path,MAX_PATH);char *slash=strrchr(log_path,'\\');if(!slash)return 0;
  strcpy(slash+1,"PlayerObstructionHoldFire.log");
- QueryPerformanceFrequency(&perf_frequency);strcpy(metrics_path,log_path);strcpy(strrchr(metrics_path,'\\')+1,"baseline_metrics.csv");
- FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,snapshot_age_ms\n");fclose(mf);}
+ QueryPerformanceFrequency(&perf_frequency);strcpy(metrics_path,log_path);strcpy(strrchr(metrics_path,'\\')+1,"native_metrics.csv");
+ char ini[MAX_PATH];strcpy(ini,log_path);strcpy(strrchr(ini,'\\')+1,"PlayerObstructionHoldFire.ini");
+ hold_fire_enabled=GetPrivateProfileIntA("Debug","EnableHoldFire",1,ini)!=0;
+ metrics_enabled=GetPrivateProfileIntA("Debug","EnableMetrics",0,ini)!=0;
+#ifdef FRAME_CAPTURE
+ frames_requested=GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini)==1;
+#endif
+ if(frames_requested)metrics_enabled=1;
+ if(metrics_enabled){FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,reserved\n");fclose(mf);}}
  if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
- game_base=(uintptr_t)GetModuleHandleW(NULL);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
+ game_base=(uintptr_t)GetModuleHandleW(NULL);
+ if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.0-testing. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ get_controller=(void*)(game_base+0x2432506);get_pawn=(void*)(game_base+0x2f8c936);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
  if(memcmp(hook,expected_hook,8)){log_message("REFUSED: pre-shot instruction mismatch.");return 0;}
  cave=allocate_near((uintptr_t)hook);if(!cave){log_message("REFUSED: no near allocation.");return 0;}
  // Tail-call C with controller RDI and shooter RSI. Original CALL supplies ABI stack alignment.
@@ -209,26 +264,52 @@ __declspec(dllexport) int luaopen_PlayerObstructionHoldFire(void *L){
  if(!VirtualProtect(cave,4096,PAGE_EXECUTE_READ,&old))goto fail;
  FlushInstructionCache(GetCurrentProcess(),cave,sizeof(stub));
  unsigned char patch[8];memcpy(patch,expected_hook,8);patch[0]=0xe8;int32_t delta=(int32_t)((uintptr_t)cave-((uintptr_t)hook+5));memcpy(patch+1,&delta,4);
- HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch))goto fail;
- log_message("ACTIVE: experimental pre-shot obstruction gate. Awaiting player snapshot.");return 0;
+ HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch,expected_hook))goto fail;
+ worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.0-testing guarded memory reads enabled; per-shot native player lookup.");return 0;
 fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
-__declspec(dllexport) int luaopen_PlayerObstructionStatus(void *L){
- if(cave&&perf_frequency.QuadPart){
-  static const char *names[]={"lua_callback","controller_lookup","capsule_reads","snapshot_memory_transfer","queue_wait","native_gate_including_original","native_snapshot_commit","controller_cache_hits","controller_cache_refreshes","snapshot_invalidations"};
-  FILE *f=fopen(metrics_path,"a");if(f){
-   for(int i=0;i<10;i++)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,%llu\n",
-    (unsigned long long)GetTickCount64(),names[i],metrics[i].count,
-    (double)metrics[i].total*1e6/perf_frequency.QuadPart,(double)metrics[i].maximum*1e6/perf_frequency.QuadPart,
-    checks,blocked,snapshot_attempts,snapshot_successes,no_player,unsupported,(unsigned long long)(GetTickCount64()-snapshot_time));
-   fclose(f);
+static void write_status(void){
+ static const char *names[]={"native_player_lookup","aim_transform","relation","unused3","unused4","native_gate_including_original","guarded_read_fault","get_player_controller","get_pawn","guarded_read"};
+ FILE *f=fopen(metrics_path,"a");
+ InterlockedExchange64(&metrics[9].count,guarded_reads);
+ InterlockedExchange64(&metrics[6].count,read_faults);
+ if(f){for(int i=0;i<10;i++){if(i<3||i>=5)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,0\n",
+ (unsigned long long)GetTickCount64(),names[i],InterlockedCompareExchange64(&metrics[i].count,0,0),
+ (double)InterlockedCompareExchange64(&metrics[i].total,0,0)*1e6/perf_frequency.QuadPart,
+ (double)InterlockedCompareExchange64(&metrics[i].maximum,0,0)*1e6/perf_frequency.QuadPart,
+ InterlockedCompareExchange64(&checks,0,0),InterlockedCompareExchange64(&blocked,0,0),
+ InterlockedCompareExchange64(&snapshot_attempts,0,0),InterlockedCompareExchange64(&snapshot_successes,0,0),
+ InterlockedCompareExchange64(&no_player,0,0),InterlockedCompareExchange64(&unsupported,0,0));}fclose(f);}
+}
+static DWORD WINAPI worker(void *arg){
+ (void)arg;initialize(NULL);
+#ifdef FRAME_CAPTURE
+ if(worker_ready && frames_requested)frame_init();
+#endif
+ if(worker_ready && (metrics_enabled || frames_requested)){ULONGLONG next=GetTickCount64()+5000;
+  for(;;){
+#ifdef FRAME_CAPTURE
+   Sleep(1000);frame_flush();
+#else
+   Sleep(5000);
+#endif
+   ULONGLONG now=GetTickCount64();if(now>=next){if(metrics_enabled)write_status();next=now+5000;}
   }
  }
-
- (void)L;if(cave){char s[512];snprintf(s,sizeof(s),"ACTIVE: version=0.2.3-cache-metrics margin_cm=40 system_uptime_ms=%llu snapshot_attempts=%lld snapshot_successes=%lld checks=%lld withheld=%lld unavailable_player=%lld unsupported_aim=%lld snapshot_age_ms=%llu",(unsigned long long)GetTickCount64(),snapshot_attempts,snapshot_successes,checks,blocked,no_player,unsupported,(unsigned long long)(GetTickCount64()-snapshot_time));log_message(s);}return 0;
+ return 0;
 }
-BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID reserved){(void)reserved;if(why==DLL_PROCESS_ATTACH){self=h;DisableThreadLibraryCalls(h);}return TRUE;}
+// ASI loader entry point. DllMain only schedules the worker; engine access occurs in the shot hook.
+__declspec(dllexport) void InitializeASI(void){
+ static volatile LONG started;
+ if(InterlockedCompareExchange(&started,1,0))return;
+ HMODULE pinned;
+ if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&InitializeASI,&pinned))return;
+ HANDLE t=CreateThread(NULL,0,worker,NULL,0,NULL);if(t)CloseHandle(t);
+}
+BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID reserved){
+ (void)reserved;if(why==DLL_PROCESS_ATTACH){self=h;DisableThreadLibraryCalls(h);InitializeASI();}return TRUE;
+}
 #ifdef GEOMETRY_TEST
 #define CHECK(want) do { if(intersects(o,d,length,p,r,h)!=(want)){printf("Geometry failure at line %d\n",__LINE__);return 1;}cases++; }while(0)
 int main(void){
@@ -244,15 +325,58 @@ int main(void){
 }
 #endif
 
-#ifdef BRIDGE_TEST
+
+#ifdef NATIVE_TEST
+static unsigned char npc_test[0x700],pc_test[0x700],pawn_test[0x700],cap_test[0x700],gameplay_test[32],vt_test[0x200];
+static unsigned char items_test[24*4];static uintptr_t chunks_test[1];static int missing;
+static uintptr_t mock_controller(void *ctx,int i){return ctx==npc_test && i==0 && !missing?(uintptr_t)pc_test:0;}
+static uintptr_t mock_pawn(void *pc){return pc==pc_test?(uintptr_t)pawn_test:0;}
+#define EXPECT(x) do{if(!(x)){printf("Native test failure line %d\n",__LINE__);return 1;}cases++;}while(0)
 int main(void){
- const char *payload="00007ff6123456780fa02328";
- luaopen_BridgeReset(NULL);
- for(int i=0;i<24;i++){unsigned d=payload[i]>='a'?payload[i]-'a'+10:payload[i]-'0';bridge_digit(d);}
- if(bridge_digits!=24||bridge_address!=UINT64_C(0x00007ff612345678)||bridge_dimensions!=UINT64_C(0x0fa02328))return 1;
- bridge_digit(0);if(bridge_digits!=25)return 2;
- luaopen_BridgeReset(NULL);if(bridge_digits||bridge_address||bridge_dimensions)return 3;
- bridge_thread=GetCurrentThreadId()+1;bridge_digit(0);if(bridge_digits!=25)return 4;
- puts("Bridge encoding, reset, overflow and thread rejection passed");return 0;
+ int cases=0;metrics_enabled=1;QueryPerformanceFrequency(&perf_frequency);game_base=(uintptr_t)VirtualAlloc(NULL,0xa240000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);if(!game_base)return 2;
+ *(uintptr_t*)(game_base+0xa0e68d0)=(uintptr_t)chunks_test;*(int*)(game_base+0xa0e68e4)=4;chunks_test[0]=(uintptr_t)items_test;
+ unsigned char *objs[]={npc_test,pc_test,pawn_test,cap_test};
+ for(int i=0;i<4;i++){*(int*)(objs[i]+12)=i;*(uintptr_t*)(items_test+i*24)=(uintptr_t)objs[i];}
+ *(uintptr_t*)npc_test=(uintptr_t)vt_test;*(uintptr_t*)(vt_test+0x198)=1;
+ *(uintptr_t*)(pawn_test+0x650)=(uintptr_t)gameplay_test;*(unsigned*)(gameplay_test+16)=123;*(unsigned*)(game_base+0x9eec140)=123;
+ *(uintptr_t*)(pawn_test+0x340)=(uintptr_t)cap_test;*(uintptr_t*)(cap_test+0x10)=456;*(uintptr_t*)(game_base+0xa234940)=456;
+ *(double*)(cap_test+0x210)=1;*(double*)(cap_test+0x218)=1;*(double*)(cap_test+0x220)=1;
+ *(float*)(cap_test+0x50c)=40;*(float*)(cap_test+0x508)=90;
+ get_controller=mock_controller;get_pawn=mock_pawn;
+ EXPECT(native_player(npc_test)&&radius==40&&halfheight==90);
+ *(float*)(cap_test+0x508)=55;EXPECT(native_player(npc_test)&&halfheight==55);
+ *(double*)(cap_test+0x210)=0.5;EXPECT(native_player(npc_test)&&radius==20);
+ missing=1;EXPECT(!native_player(npc_test));missing=0;
+ *(unsigned*)(items_test+3*24+8)=0x10000000;EXPECT(!native_player(npc_test));*(unsigned*)(items_test+3*24+8)=0;
+ *(uintptr_t*)(cap_test+0x10)=999;EXPECT(!native_player(npc_test));*(uintptr_t*)(cap_test+0x10)=456;
+ *(double*)(cap_test+0x220)=NAN;EXPECT(!native_player(npc_test));*(double*)(cap_test+0x220)=1;
+ *(uintptr_t*)(pawn_test+0x340)=0;*(uintptr_t*)(pawn_test+0x1c0)=(uintptr_t)cap_test;EXPECT(native_player(npc_test));
+ *(uintptr_t*)(items_test+2*24)=0;EXPECT(!native_player(npc_test));
+ *(uintptr_t*)(items_test+2*24)=(uintptr_t)pawn_test;
+ // Fault handling must work with optimized code and real inaccessible mappings.
+ unsigned char *page=VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+ unsigned char data[32];DWORD old;
+ EXPECT(page!=NULL);page[0]=123;EXPECT(safe_copy(data,(uintptr_t)page,32)&&data[0]==123);
+ EXPECT(!safe_copy(data,UINTPTR_MAX-4,16));EXPECT(!safe_copy(data,0,1));
+ EXPECT(VirtualProtect(page+4096,4096,PAGE_NOACCESS,&old));
+ EXPECT(!safe_copy(data,(uintptr_t)page+4090,16));
+ EXPECT(VirtualProtect(page,4096,PAGE_READWRITE|PAGE_GUARD,&old));
+ EXPECT(!safe_copy(data,(uintptr_t)page,1));
+ MEMORY_BASIC_INFORMATION m;EXPECT(VirtualQuery(page,&m,sizeof(m))&&(m.Protect&PAGE_GUARD));
+ EXPECT(VirtualProtect(page,4096,PAGE_READWRITE,&old));
+ EXPECT(safe_copy(data,(uintptr_t)page,1)&&data[0]==123);
+ EXPECT(VirtualFree(page,0,MEM_RELEASE));EXPECT(!safe_copy(data,(uintptr_t)page,1));
+ LONG64 faults_before=read_faults,t=stamp();const int loops=20000;
+ for(int i=0;i<loops;i++)if(!native_player(npc_test))return 3;
+ EXPECT(read_faults==faults_before);
+ printf("lookup_benchmark: %.3f us/call (%d calls); no faults on valid lookups\n",
+ (stamp()-t)*1e6/perf_frequency.QuadPart/loops,loops);
+ LONG64 saved_reads=guarded_reads,saved_success=snapshot_successes,saved_metric=metrics[7].count;
+ metrics_enabled=0;
+ EXPECT(metric_stamp()==0);
+ EXPECT(native_player(npc_test));
+ EXPECT(guarded_reads==saved_reads && snapshot_successes==saved_success && metrics[7].count==saved_metric);
+ metrics_enabled=1;
+ VirtualFree((void*)game_base,0,MEM_RELEASE);printf("%d native lookup scenarios passed\n",cases);return 0;
 }
 #endif

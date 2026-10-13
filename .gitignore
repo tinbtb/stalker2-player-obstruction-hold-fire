@@ -8,3 +8,6 @@
 *.log
 player_snapshot.txt
 __pycache__/
+
+/native-*/
+*.asi

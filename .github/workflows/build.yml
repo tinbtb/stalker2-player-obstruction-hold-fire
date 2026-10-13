@@ -1,4 +1,4 @@
-name: Windows build and package
+name: Native ASI Windows build and package
 on:
   push:
   pull_request:
@@ -18,6 +18,6 @@ jobs:
         run: ./build.ps1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: PlayerObstructionHoldFire-Windows-x64-CI
+          name: PlayerObstructionHoldFire-native-Windows-x64-CI
           path: dist/*
           if-no-files-found: error

@@ -1,11 +1,16 @@
-v0.2.3-cache-metrics - Windows UE4SS testing release
+# v0.4.0-testing - Native ASI with optional diagnostics
 
-- Increase capsule safety margin from 15 to 40 cm on radius and half-height.
-- Replace recurring snapshot file I/O with an in-memory bridge.
-- Cache and validate the controller, refresh every 100 uses, and read current pawn/component references each update.
-- Invalidate native snapshots immediately when objects are missing or callbacks fail.
-- Include cumulative performance metrics and capture instructions; instrumentation remains enabled.
+Native ASI replaces this mod's UE4SS/Lua dependency. Neutral/Friendly NPCs withhold
+shots when the predicted path intersects the player capsule plus a 40 cm margin.
+Guarded reads remove the VirtualQuery-heavy validation path measured in older builds.
 
-The release ZIP uses the exact DLL and Lua script from the latest in-game capture: 6,289 accepted snapshots, 906 withheld attempts, no unavailable-player/unsupported-aim checks. Average callback duration in separate captures decreased from 1,166 to 81 microseconds; this is not a controlled FPS benchmark.
+Metrics and engine-frame capture are disabled by default and can be enabled in the
+adjacent INI. A control setting skips the entire firing hook. Includes a README,
+checksums and optional Ultimate ASI Loader 9.7.4 x64 as winhttp.dll with MIT notice.
+An ASI-only package is also available. Keep an existing loader; do not overwrite
+proxy DLLs. Disable old ASI/UE4SS copies before installing exactly one native mod.
 
-Requires the executable fingerprint documented in README and an existing UE4SS installation. Close the game and replace both Lua and DLL. Do not hot reload. No loader or game binaries are bundled.
+Experimental exact-build release. Derived native code has in-game enabled/control
+measurements; release diagnostic-default changes are synthetic/smoke tested. The
+uncapped comparison used different NPC counts, so no matched FPS claim is made.
+Game-thread capture does not measure displayed frames or GPU time.

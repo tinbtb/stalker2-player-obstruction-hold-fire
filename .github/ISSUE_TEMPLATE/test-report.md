@@ -1,19 +1,18 @@
 ---
 name: Testing report
-about: Report working behavior or a problem with the testing release
+about: Report behavior or performance with the native ASI release
 ---
 
 Mod version:
 Game executable SHA256:
-UE4SS version:
-Other combat/AI mods:
+ASI loader/version:
+EnableHoldFire / EnableMetrics / CaptureEngineFrames settings:
+CPU/GPU, VSync/FPS limit and frame generation:
+Other combat/AI mods (and UE4SS version if used for other mods):
 
-What did you expect?
+Expected and actual behavior:
+Steps to reproduce, including save/route/NPC types and counts:
+Pause time/action if applicable:
 
-What happened? Did NPC shooting pause and resume? Any bleeding or armor wear?
-
-Steps to reproduce:
-
-Native status log (review personal paths before posting):
-
-Relevant UE4SS log excerpt:
+Attach diagnostic logs privately if they contain information you do not want public.
+See README for enabling capture and preserving files between runs.

@@ -1,26 +1,34 @@
-param([string]$ZigPath = '', [string]$Python = 'python')
+param([string]$ZigPath = '',[string]$Python = 'python')
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
-if (!$ZigPath) { $ZigPath = Join-Path $root '.tools\zig-x86_64-windows-0.15.2\zig.exe' }
-if (!(Test-Path -LiteralPath $ZigPath)) { throw 'Run scripts/get-zig.ps1 first or supply -ZigPath.' }
+if (!$ZigPath) { $ZigPath = Join-Path $PSScriptRoot '.tools/zig-x86_64-windows-0.15.2/zig.exe' }
 $ZigPath = (Resolve-Path -LiteralPath $ZigPath).Path
-$version = & $ZigPath version
-if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne '0.15.2') { throw 'This build requires Zig 0.15.2.' }
-$build = Join-Path $root 'build'
+if ((& $ZigPath version).Trim() -ne '0.15.2') { throw 'Requires Zig 0.15.2' }
+$captureFlags = @('-DFRAME_CAPTURE')
+$build = Join-Path $PSScriptRoot 'build'
 New-Item -ItemType Directory -Force $build | Out-Null
-$source = Join-Path $root 'src\PlayerObstructionHoldFire.c'
-$dll = Join-Path $build 'PlayerObstructionHoldFire.dll'
-& $ZigPath cc -target x86_64-windows-gnu -shared -O2 -Wall -Wextra $source -lbcrypt -o $dll
-if ($LASTEXITCODE -ne 0) { throw 'DLL build failed' }
-$test = Join-Path $build 'geometry-test.exe'
-& $ZigPath cc -target x86_64-windows-gnu -O2 -DGEOMETRY_TEST $source -lbcrypt -o $test
-if ($LASTEXITCODE -ne 0) { throw 'Geometry test build failed' }
-& $test
-if ($LASTEXITCODE -ne 0) { throw 'Geometry tests failed' }
-$bridgeTest = Join-Path $build 'bridge-test.exe'
-& $ZigPath cc -target x86_64-windows-gnu -O2 -DBRIDGE_TEST $source -lbcrypt -o $bridgeTest
-if ($LASTEXITCODE -ne 0) { throw 'Bridge test build failed' }
-& $bridgeTest
-if ($LASTEXITCODE -ne 0) { throw 'Bridge tests failed' }
-& $Python (Join-Path $root 'scripts\package.py')
-if ($LASTEXITCODE -ne 0) { throw 'Verification/packaging failed' }
+$source = Join-Path $PSScriptRoot 'src/PlayerObstructionHoldFire.c'
+& $ZigPath cc -g0 -fms-extensions -target x86_64-windows-gnu -shared @captureFlags -O2 -Wall -Wextra -Werror $source -lbcrypt -o (Join-Path $build 'PlayerObstructionHoldFire.asi')
+if ($LASTEXITCODE) { throw 'ASI build failed' }
+& $Python (Join-Path $PSScriptRoot 'scripts/normalize_pe.py') (Join-Path $build 'PlayerObstructionHoldFire.asi')
+if ($LASTEXITCODE) { throw 'PE normalization failed' }
+foreach ($kind in @('GEOMETRY_TEST', 'NATIVE_TEST')) {
+ $test = Join-Path $build "$kind.exe"
+ & $ZigPath cc -g0 -fms-extensions -target x86_64-windows-gnu -O2 @captureFlags "-D$kind" $source -lbcrypt -o $test
+ if ($LASTEXITCODE) { throw 'Test build failed' }
+ & $test
+ if ($LASTEXITCODE) { throw "$kind failed" }
+}
+
+& {
+ $test = Join-Path $build 'FRAME_TEST.exe'
+ & $ZigPath cc -g0 -fms-extensions -target x86_64-windows-gnu -O2 -DFRAME_CAPTURE -DFRAME_TEST $source -lbcrypt -o $test
+ if ($LASTEXITCODE) { throw 'Frame capture test build failed' }
+ & $test
+ if ($LASTEXITCODE) { throw 'Frame capture test failed' }
+}
+
+& (Join-Path $PSScriptRoot 'scripts/get-loader.ps1')
+& $Python (Join-Path $PSScriptRoot 'scripts/package.py')
+if ($LASTEXITCODE) { throw 'Packaging failed' }
+
+
