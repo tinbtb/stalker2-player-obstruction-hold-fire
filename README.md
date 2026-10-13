@@ -1,4 +1,4 @@
-# Player Obstruction Hold Fire — v0.4.1-testing
+# Player Obstruction Hold Fire — v0.4.3-relationship-test
 
 [Releases / Завантаження / Скачать](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases)
 
@@ -7,6 +7,7 @@
 EnableHoldFire=1
 EnableMetrics=0
 CaptureEngineFrames=0
+CaptureRelationships=0
 ```
 
 ## English
@@ -26,6 +27,7 @@ available. Install exactly one copy.
 protection for a control run. `EnableMetrics=1` writes counters/timings to
 `native_metrics.csv`. `CaptureEngineFrames=1` writes game-thread tick intervals to
 `engine_frames.csv` and enables metrics; these are not GPU/display frame timings.
+`CaptureRelationships=1` adds raw relationship counters and enables metrics.
 Diagnostics are **off by default**. Preserve logs before another diagnostic run.
 
 The startup log should say ACTIVE; REFUSED means incompatible EXE/conflict.
@@ -52,7 +54,8 @@ remove the optional loader only if no other mod needs it. Loader license: `Ultim
 вимикає захист для контрольного запуску. `EnableMetrics=1` записує лічильники й час
 виконання у `native_metrics.csv`. `CaptureEngineFrames=1` записує інтервали тактів
 ігрового потоку в `engine_frames.csv` і вмикає метрики; це не час GPU чи відображення
-кадрів. Діагностику **типово вимкнено**. Зберігайте журнали між тестами.
+кадрів. `CaptureRelationships=1` додає лічильники відносин і вмикає метрики.
+Діагностику **типово вимкнено**. Зберігайте журнали між тестами.
 
 У стартовому журналі має бути ACTIVE; REFUSED означає несумісний EXE або конфлікт.
 Кулі в польоті, більший розкид та інша шкода залишаються небезпечними. Некоректні
@@ -78,7 +81,8 @@ remove the optional loader only if no other mod needs it. Loader license: `Ultim
 отключает защиту для контрольного запуска. `EnableMetrics=1` записывает счётчики и
 время выполнения в `native_metrics.csv`. `CaptureEngineFrames=1` записывает интервалы
 тактов игрового потока в `engine_frames.csv` и включает метрики; это не время GPU
-или отображения кадров. Диагностика **по умолчанию выключена**. Сохраняйте журналы
+или отображения кадров. `CaptureRelationships=1` добавляет счётчики отношений
+и включает метрики. Диагностика **по умолчанию выключена**. Сохраняйте журналы
 между тестами.
 
 В стартовом журнале должно быть ACTIVE; REFUSED означает несовместимый EXE или

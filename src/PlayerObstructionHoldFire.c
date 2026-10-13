@@ -9,7 +9,7 @@
 // This is an exact-build proof of concept; no Unreal SDK or Lua ABI imports.
 static HMODULE self;
 static volatile LONG once;
-static int worker_ready,hold_fire_enabled=1,metrics_enabled,frames_requested;
+static int worker_ready,hold_fire_enabled=1,metrics_enabled,frames_requested,relationships_requested;
 #define COUNT(counter) do{if(metrics_enabled)InterlockedIncrement64(&(counter));}while(0)
 static unsigned char *cave;
 static char log_path[MAX_PATH];
@@ -169,7 +169,14 @@ static int valid_object(uintptr_t obj,size_t size){
 }
 static uintptr_t (*get_controller)(void*,int);
 static uintptr_t (*get_pawn)(void*);
-static int native_player(void *actor){
+static unsigned char (*get_ready)(void*);
+// The relationship routine takes identity keys, not gameplay object addresses.
+static uintptr_t (*get_relation_identity)(void*);
+static unsigned char (*get_relation)(uintptr_t,uintptr_t);
+static volatile LONG64 relation_values[256],withheld_values[256];
+static void *(*get_aim)(void*,void*,unsigned char);
+typedef struct { uintptr_t pawn, gameplay; unsigned id; } PlayerIdentity;
+static int native_identity(void *actor,PlayerIdentity *out){
  COUNT(snapshot_attempts);
  uintptr_t npc=(uintptr_t)actor,vt,world_getter;
  if(!valid_object(npc,0x658)||!COPY_AT(vt,npc)||!vt||
@@ -181,6 +188,9 @@ static int native_player(void *actor){
  uintptr_t pg;unsigned player_id,pg_id;
  if(!COPY_AT(pg,pawn+0x650)||!pg||!COPY_AT(pg_id,pg+16)||
     !COPY_AT(player_id,game_base+0x9eec140)||pg_id!=player_id)return 0;
+ out->pawn=pawn;out->gameplay=pg;out->id=player_id;return 1;
+}
+static int native_capsule(uintptr_t pawn){
  uintptr_t cls,capsule,actual_cls;
  if(!COPY_AT(cls,game_base+0xa234940)||!cls)return 0;
  if(!COPY_AT(capsule,pawn+0x340))return 0;
@@ -198,41 +208,53 @@ static int native_player(void *actor){
  memcpy(player_position,position,sizeof(position));player_actor=pawn;radius=r;halfheight=h;
  COUNT(snapshot_successes);return 1;
 }
+#ifdef NATIVE_TEST
+static int native_player(void *actor){
+ PlayerIdentity player;
+ return native_identity(actor,&player)&&native_capsule(player.pawn);
+}
+#endif
 static unsigned char gate_inner(void *controller,void *actor){
- unsigned char ready=((unsigned char(*)(void*))(game_base+0x44041c))(controller);
+ unsigned char ready=get_ready(controller);
  if(ready)return ready;
  COUNT(checks);
  LONG tid=(LONG)GetCurrentThreadId();
  LONG owner=InterlockedCompareExchange(&gate_thread,tid,0);
  if(owner && owner!=tid){COUNT(no_player);return 0;}
- LONG64 lookup_start=metric_stamp();int found=native_player(actor);record_metric(0,lookup_start);
+ PlayerIdentity player;
+ LONG64 lookup_start=metric_stamp();int found=native_identity(actor,&player);record_metric(0,lookup_start);
  if(!found){COUNT(no_player);return 0;}
- uintptr_t npc=(uintptr_t)actor,ng,pg,vt,aim;unsigned ng_id,pg_id,player_id;
- if(npc==player_actor)return 0;
- if(!COPY_AT(ng,npc+0x650)||!ng||!COPY_AT(pg,player_actor+0x650)||!pg||
-    !COPY_AT(ng_id,ng+16)||!COPY_AT(pg_id,pg+16)||!COPY_AT(player_id,game_base+0x9eec140)||
-    pg_id!=player_id||ng_id==player_id)return 0;
+ uintptr_t npc=(uintptr_t)actor,ng,vt,aim;unsigned ng_id;
+ if(npc==player.pawn)return 0;
+ if(!COPY_AT(ng,npc+0x650)||!ng||!COPY_AT(ng_id,ng+16)||ng_id==player.id)return 0;
  if(!COPY_AT(vt,npc)||!vt||!COPY_AT(aim,vt+0xaa0)||aim!=game_base+0xa66c56){
   COUNT(unsupported);return 0;
  }
+ // Relationships are fresh per shot. Hostiles never need capsule or aim work.
+ LONG64 relation_start=metric_stamp();
+ uintptr_t shooter_key=get_relation_identity((void*)ng);
+ uintptr_t player_key=get_relation_identity((void*)player.gameplay);
+ unsigned char relation=get_relation(shooter_key,player_key);
+ record_metric(2,relation_start);
+ if(relationships_requested)InterlockedIncrement64(&relation_values[relation]);
+ if(relation!=2&&relation!=3)return 0;
  unsigned char aim_mode;float shot_length;
  if(!COPY_AT(aim_mode,(uintptr_t)controller+0x10)||!COPY_AT(shot_length,(uintptr_t)controller+8))return 0;
+ double length=shot_length;
+ if(!isfinite(length)||length<1||length>1000000)return 0;
+ LONG64 capsule_start=metric_stamp();found=native_capsule(player.pawn);record_metric(3,capsule_start);
+ if(!found){COUNT(no_player);return 0;}
  double p[3];memcpy(p,player_position,24);
  _Alignas(16) double transform[12]={0};
  LONG64 aim_start=metric_stamp();
- ((void*(*)(void*,void*,unsigned char))(game_base+0xa66c56))(actor,transform,aim_mode);
+ get_aim(actor,transform,aim_mode);
  record_metric(1,aim_start);
  double x=transform[0],y=transform[1],z=transform[2],w=transform[3];
  double norm=x*x+y*y+z*z+w*w;
  if(!isfinite(norm)||fabs(norm-1)>0.02)return 0;
  double direction[3]={1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)};
- double length=shot_length;
- if(!isfinite(length)||length<1||length>1000000)return 0;
  if(!intersects(transform+4,direction,length,p,radius+SAFETY_MARGIN_CM,halfheight+SAFETY_MARGIN_CM))return 0;
- LONG64 relation_start=metric_stamp();
- unsigned char relation=((unsigned char(*)(void*,void*))(game_base+0x235809b))((void*)ng,(void*)pg);
- record_metric(2,relation_start);
- if(relation!=2&&relation!=3)return 0;
+ if(relationships_requested)InterlockedIncrement64(&withheld_values[relation]);
  COUNT(blocked);return 1;
 }
 static unsigned char gate(void *controller,void *actor){ LONG64 t=metric_stamp();unsigned char result=gate_inner(controller,actor);record_metric(5,t);return result;}
@@ -247,6 +269,8 @@ static int initialize(void *L){
  char ini[MAX_PATH];strcpy(ini,log_path);strcpy(strrchr(ini,'\\')+1,"PlayerObstructionHoldFire.ini");
  hold_fire_enabled=GetPrivateProfileIntA("Debug","EnableHoldFire",1,ini)!=0;
  metrics_enabled=GetPrivateProfileIntA("Debug","EnableMetrics",0,ini)!=0;
+ relationships_requested=GetPrivateProfileIntA("Debug","CaptureRelationships",0,ini)==1;
+ if(relationships_requested)metrics_enabled=1;
 #ifdef FRAME_CAPTURE
  frames_requested=GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini)==1;
 #endif
@@ -254,7 +278,8 @@ static int initialize(void *L){
  if(metrics_enabled){FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,reserved\n");fclose(mf);}}
  if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
  game_base=(uintptr_t)GetModuleHandleW(NULL);
- if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.0-testing. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.3-relationship-test. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ get_ready=(void*)(game_base+0x44041c);get_relation_identity=(void*)(game_base+0x4d61a4);get_relation=(void*)(game_base+0x235809b);get_aim=(void*)(game_base+0xa66c56);
  get_controller=(void*)(game_base+0x2432506);get_pawn=(void*)(game_base+0x2f8c936);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
  if(memcmp(hook,expected_hook,8)){log_message("REFUSED: pre-shot instruction mismatch.");return 0;}
  cave=allocate_near((uintptr_t)hook);if(!cave){log_message("REFUSED: no near allocation.");return 0;}
@@ -265,22 +290,29 @@ static int initialize(void *L){
  FlushInstructionCache(GetCurrentProcess(),cave,sizeof(stub));
  unsigned char patch[8];memcpy(patch,expected_hook,8);patch[0]=0xe8;int32_t delta=(int32_t)((uintptr_t)cave-((uintptr_t)hook+5));memcpy(patch+1,&delta,4);
  HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch,expected_hook))goto fail;
- worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.0-testing guarded memory reads enabled; per-shot native player lookup.");return 0;
+ worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.3-relationship-test guarded memory reads enabled; per-shot native player lookup.");return 0;
 fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
 static void write_status(void){
- static const char *names[]={"native_player_lookup","aim_transform","relation","unused3","unused4","native_gate_including_original","guarded_read_fault","get_player_controller","get_pawn","guarded_read"};
+ static const char *names[]={"native_player_identity","aim_transform","relation","player_capsule","unused4","native_gate_including_original","guarded_read_fault","get_player_controller","get_pawn","guarded_read"};
  FILE *f=fopen(metrics_path,"a");
  InterlockedExchange64(&metrics[9].count,guarded_reads);
  InterlockedExchange64(&metrics[6].count,read_faults);
- if(f){for(int i=0;i<10;i++){if(i<3||i>=5)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,0\n",
+ if(f){for(int i=0;i<10;i++){if(i<4||i>=5)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,0\n",
  (unsigned long long)GetTickCount64(),names[i],InterlockedCompareExchange64(&metrics[i].count,0,0),
  (double)InterlockedCompareExchange64(&metrics[i].total,0,0)*1e6/perf_frequency.QuadPart,
  (double)InterlockedCompareExchange64(&metrics[i].maximum,0,0)*1e6/perf_frequency.QuadPart,
  InterlockedCompareExchange64(&checks,0,0),InterlockedCompareExchange64(&blocked,0,0),
  InterlockedCompareExchange64(&snapshot_attempts,0,0),InterlockedCompareExchange64(&snapshot_successes,0,0),
- InterlockedCompareExchange64(&no_player,0,0),InterlockedCompareExchange64(&unsupported,0,0));}fclose(f);}
+ InterlockedCompareExchange64(&no_player,0,0),InterlockedCompareExchange64(&unsupported,0,0));}
+ if(relationships_requested)for(int v=0;v<256;v++){
+  LONG64 n=InterlockedCompareExchange64(&relation_values[v],0,0);
+  LONG64 b=InterlockedCompareExchange64(&withheld_values[v],0,0);
+  if(n)fprintf(f,"%llu,relationship_value_%d,%lld,0,0,0,0,0,0,0,0,0\n",(unsigned long long)GetTickCount64(),v,n);
+  if(b)fprintf(f,"%llu,withheld_relationship_%d,%lld,0,0,0,0,0,0,0,0,0\n",(unsigned long long)GetTickCount64(),v,b);
+ }
+ fclose(f);}
 }
 static DWORD WINAPI worker(void *arg){
  (void)arg;initialize(NULL);
@@ -327,10 +359,23 @@ int main(void){
 
 
 #ifdef NATIVE_TEST
-static unsigned char npc_test[0x700],pc_test[0x700],pawn_test[0x700],cap_test[0x700],gameplay_test[32],vt_test[0x200];
+static unsigned char npc_test[0x700],pc_test[0x700],pawn_test[0x700],cap_test[0x700],gameplay_test[32],vt_test[0xab0];
 static unsigned char items_test[24*4];static uintptr_t chunks_test[1];static int missing;
 static uintptr_t mock_controller(void *ctx,int i){return ctx==npc_test && i==0 && !missing?(uintptr_t)pc_test:0;}
 static uintptr_t mock_pawn(void *pc){return pc==pc_test?(uintptr_t)pawn_test:0;}
+static unsigned char npc_gameplay_test[32],shot_test[32];
+static int aim_calls,relation_calls;static unsigned char test_relation=2,test_ready;
+static double aim_y;
+static unsigned char mock_ready(void *c){(void)c;return test_ready;}
+static uintptr_t mock_relation_identity(void *obj){
+ return obj==npc_gameplay_test?0x1111222233334444ULL:obj==gameplay_test?0x5555666677778888ULL:0;
+}
+static unsigned char mock_relation(uintptr_t a,uintptr_t b){
+ relation_calls++;return a==0x1111222233334444ULL && b==0x5555666677778888ULL?test_relation:0;
+}
+static void *mock_aim(void *a,void *out,unsigned char mode){
+ (void)a;(void)mode;aim_calls++;double *t=out;t[3]=1;t[4]=-200;t[5]=aim_y;return out;
+}
 #define EXPECT(x) do{if(!(x)){printf("Native test failure line %d\n",__LINE__);return 1;}cases++;}while(0)
 int main(void){
  int cases=0;metrics_enabled=1;QueryPerformanceFrequency(&perf_frequency);game_base=(uintptr_t)VirtualAlloc(NULL,0xa240000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);if(!game_base)return 2;
@@ -377,6 +422,36 @@ int main(void){
  EXPECT(native_player(npc_test));
  EXPECT(guarded_reads==saved_reads && snapshot_successes==saved_success && metrics[7].count==saved_metric);
  metrics_enabled=1;
+ // Exercise the real gate: invalid capsules cannot affect hostile fast exits.
+ get_ready=mock_ready;get_relation_identity=mock_relation_identity;get_relation=mock_relation;get_aim=mock_aim;
+ *(uintptr_t*)(npc_test+0x650)=(uintptr_t)npc_gameplay_test;
+ *(unsigned*)(npc_gameplay_test+16)=456;
+ *(uintptr_t*)(vt_test+0xaa0)=game_base+0xa66c56;
+ *(float*)(shot_test+8)=1000;
+ test_ready=7;EXPECT(gate_inner(shot_test,npc_test)==7 && relation_calls==0 && aim_calls==0);test_ready=0;
+ *(uintptr_t*)(cap_test+0x10)=999;
+ LONG64 capsule_count=metrics[3].count;
+ for(int rel=0;rel<5;rel++)if(rel!=2 && rel!=3){test_relation=(unsigned char)rel;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==0 && metrics[3].count==capsule_count);}
+ test_relation=2;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==0);
+ *(uintptr_t*)(cap_test+0x10)=456;
+ EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==1);
+ test_relation=3;EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==2);
+ aim_y=1000;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==3);aim_y=0;
+ test_relation=0;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==3);
+ test_relation=2;EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==4);
+ *(float*)(shot_test+8)=NAN;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==4);
+ *(float*)(shot_test+8)=1000;
+ int previous_relations=relation_calls;*(uintptr_t*)(vt_test+0xaa0)=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && relation_calls==previous_relations && aim_calls==4);
+ *(uintptr_t*)(vt_test+0xaa0)=game_base+0xa66c56;
+ missing=1;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_calls==previous_relations);missing=0;
+ // Identity keys must reach the engine relation routine; pointer arguments fail these checks.
+ relationships_requested=1;test_relation=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[0]==1 && withheld_values[0]==0);
+ test_relation=2;EXPECT(gate_inner(shot_test,npc_test)==1 && relation_values[2]==1 && withheld_values[2]==1);
+ test_relation=3;EXPECT(gate_inner(shot_test,npc_test)==1 && relation_values[3]==1 && withheld_values[3]==1);
+ test_relation=255;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[255]==1);
+ relationships_requested=0;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[255]==1);
  VirtualFree((void*)game_base,0,MEM_RELEASE);printf("%d native lookup scenarios passed\n",cases);return 0;
 }
 #endif

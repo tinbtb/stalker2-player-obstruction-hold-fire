@@ -11,7 +11,7 @@ Supply -ZigPath and -Python to use existing tools. The compiler and official ASI
 loader archives are SHA-256 pinned. The loader DLL is renamed without modifying
 its bytes. License/provenance: third_party/ultimate-asi-loader/.
 
-GitHub Actions runs the same builder: 16 geometry, 26 native-memory/metrics-switch,
+GitHub Actions runs the same builder: 16 geometry, 44 native-memory/gate/metrics-switch,
 10 frame-buffer/output and three isolated unsupported-host/default tests.
 Output ZIPs in dist/ have fixed metadata, checksums and source/binary manifests.
 Builds omit debug paths; release.json pins the verified ASI hash and packaging

@@ -1,20 +1,27 @@
-# v0.4.1-testing - Flat ZIPs for Vortex
+# v0.4.3-relationship-test - Correct NPC relationship identities
 
-Native ASI replaces this mod's UE4SS/Lua dependency. Neutral/Friendly NPCs withhold
-shots when the predicted path intersects the player capsule plus a 40 cm margin.
-Guarded reads remove the VirtualQuery-heavy validation path measured in older builds.
+Fixes the native relationship-call arguments used in v0.4.1: gameplay object
+addresses were passed where the engine expects 64-bit identity keys. The mod now
+uses the game's identity resolver before classifying the NPC/player relationship.
+Incorrect arguments could misclassify shooters; no claim is made that this fix
+resolves reported stutters or long pauses.
 
-Metrics and engine-frame capture are disabled by default and can be enabled in the
-adjacent INI. A control setting skips the entire firing hook. Includes a README,
-checksums and optional Ultimate ASI Loader 9.7.4 x64 as winhttp.dll with MIT notice.
-An ASI-only package is also available. Keep an existing loader; do not overwrite
-proxy DLLs. Disable old ASI/UE4SS copies before installing exactly one native mod.
+Hostiles exit before capsule sampling, aim calculation and obstruction geometry.
+Neutral/friendly shots retain the player capsule plus 40 cm safety margin.
 
-Experimental exact-build release. Derived native code has in-game enabled/control
-measurements; release diagnostic-default changes are synthetic/smoke tested. The
-uncapped comparison used different NPC counts, so no matched FPS claim is made.
-Game-thread capture does not measure displayed frames or GPU time.
+The exact release ASI was tested with hostiles (324 relationship checks, zero
+withheld shots and zero aim calculations) and friends (1,771 checks, 569 shots
+withheld, observed stop/resume). Neutral validation is pending. Average full hook
+cost including readiness early returns was 0.49 us and 1.49 us respectively;
+these different workloads do not establish a matched FPS improvement.
 
-Packaging correction: both ZIPs now contain root-level files only, including the
-ASI, INI, README and optional winhttp.dll, for Vortex installation. The ASI and
-loader binaries are unchanged.
+Metrics, engine tick capture and optional raw relationship counters are off by
+default. Enable them through the adjacent INI and restart. Diagnostic captures
+measure engine tick intervals, not GPU or displayed-frame timings.
+
+Both ZIPs contain root-level files for Vortex. The with-loader ZIP bundles optional
+Ultimate ASI Loader 9.7.4 x64 as winhttp.dll, with license and provenance; an ASI-only
+ZIP is available. Keep an existing compatible loader and disable old copies of
+this mod. Includes a short EN/UA/RU README and explicit AI-generated disclosure.
+
+Experimental exact-build release; see README for supported EXE hash and settings.
