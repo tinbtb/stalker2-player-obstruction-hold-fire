@@ -12,8 +12,9 @@ must remain non-inlined so Zig/Clang generates a working SEH invoke boundary; te
 exercise actual access faults in optimized code. Normal reads make no VirtualQuery
 calls. Unknown/invalid data permits the original shot.
 
-The obstruction test uses segment-to-vertical-capsule distance and a 40 cm margin,
-then checks Neutral/Friendly relation before asking the original defer path to run.
+The obstruction test checks Neutral/Friendly relation, then uses
+segment-to-vertical-capsule distance and a 40 cm margin before asking the
+original defer path to run.
 Capsule scaling/crouching is read every eligible shot.
 
 INI flags gate all diagnostic counters/QPC timing. CaptureEngineFrames implies
@@ -36,6 +37,22 @@ aim function, then checks the relationship. Only relation 2 or 3 proceeds to
 shot-range validation, capsule sampling, aim calculation, and obstruction geometry.
 The safety margin and intersection rules are unchanged. Invalid data permits firing.
 No relationship or UObject cache persists between shots.
+
+## 0.4.4 conservative prediction test
+
+The earlier gate used a controller range and aim mode before the game's shot
+preparation could refresh them. This build reads the previous transform and
+checks both aim modes. It bounds every intermediate position and rotation
+between the previous and current transforms with a larger safety corridor.
+It also handles the h == r sphere case and rejects module paths that cannot
+fit the path buffers.
+
+The gate cannot know the final target distance at this hook. It tests only
+as far as the player's far side, so it can withhold fire when the player is
+behind the intended target. Additional aim calculation may cost more for
+shots whose first mode misses. No in-game validation exists yet for this
+exact build; compare friendly, neutral, hostile and frame timings before
+sharing it as a release.
 
 Metrics now separate `native_player_identity` from `player_capsule`. The former
 replaces the old combined `native_player_lookup`; compare their combined total

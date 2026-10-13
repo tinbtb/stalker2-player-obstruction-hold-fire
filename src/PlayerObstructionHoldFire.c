@@ -138,6 +138,8 @@ static int intersects(const double o[3],const double d[3],double length,const do
  double A=v[0]*v[0]+v[1]*v[1]+v[2]*v[2], B=v[2]*z,C=z*z;
  double D=v[0]*a[0]+v[1]*a[1]+v[2]*a[2],E=z*a[2];
  if(!isfinite(A)||A<1||!isfinite(C)||C<0)return 0;
+ // A capsule with h == r is a sphere: minimize against the point, not t=0.
+ if(C<=1e-9){double t=clamp01(-D/A);double x=a[0]+t*v[0],y=a[1]+t*v[1],q=a[2]+t*v[2];return x*x+y*y+q*q<=r*r;}
  double den=A*C-B*B, t=den>1e-9?clamp01((B*E-C*D)/den):0;
  double u=C>1e-9?(B*t+E)/C:0;
  if(u<0){u=0;t=clamp01(-D/A);}else if(u>1){u=1;t=clamp01((B-D)/A);}
@@ -175,6 +177,44 @@ static uintptr_t (*get_relation_identity)(void*);
 static unsigned char (*get_relation)(uintptr_t,uintptr_t);
 static volatile LONG64 relation_values[256],withheld_values[256];
 static void *(*get_aim)(void*,void*,unsigned char);
+static int valid_transform(const double t[12]){
+ double norm=t[0]*t[0]+t[1]*t[1]+t[2]*t[2]+t[3]*t[3];
+ if(!isfinite(norm)||fabs(norm-1)>0.02)return 0;
+ for(int i=4;i<7;i++)if(!isfinite(t[i]))return 0;
+ return 1;
+}
+static void forward(const double t[12],double d[3]){
+ double x=t[0],y=t[1],z=t[2],w=t[3];
+ d[0]=1-2*(y*y+z*z);d[1]=2*(x*y+w*z);d[2]=2*(x*z-w*y);
+}
+// Bound the segment produced by the game's previous/current transform blend.
+// Every blended origin lies between the two origins; the rotation is bounded
+// by the full angular separation of their quaternions.
+static int predicted_intersection(const double previous[12],const double current[12],
+ const double player[3],double r,double h){
+ if(!valid_transform(previous)||!valid_transform(current))return 0;
+ double origin_delta=0,player_distance=0;
+ for(int i=0;i<3;i++){
+  double a=previous[4+i]-current[4+i],c=player[i]-current[4+i];
+  origin_delta+=a*a;player_distance+=c*c;
+ }
+ origin_delta=sqrt(origin_delta);player_distance=sqrt(player_distance);
+ if(!isfinite(origin_delta)||!isfinite(player_distance)||player_distance>1000000)return 0;
+ double dot=0,np=0,nc=0;
+ for(int i=0;i<4;i++){dot+=previous[i]*current[i];np+=previous[i]*previous[i];nc+=current[i]*current[i];}
+ if(!isfinite(dot))return 0;
+ // Quaternion endpoints can differ in sign while representing one rotation.
+ dot=fabs(dot)/sqrt(np*nc);if(dot>1)dot=1;
+ double angular_sine=sqrt(1-dot*dot);
+ double travel_to_player=player_distance+origin_delta+h+r;
+ double expansion=origin_delta+2*travel_to_player*angular_sine;
+ // The old controller range can be stale before game shot preparation.
+ // Limit at the player's far side; this may hold fire behind the intended target.
+ double length=player_distance+origin_delta+h+r+SAFETY_MARGIN_CM;
+ if(!isfinite(expansion)||!isfinite(length))return 0;
+ double d[3];forward(current,d);
+ return intersects(current+4,d,length,player,r+SAFETY_MARGIN_CM+expansion,h+SAFETY_MARGIN_CM+expansion);
+}
 typedef struct { uintptr_t pawn, gameplay; unsigned id; } PlayerIdentity;
 static int native_identity(void *actor,PlayerIdentity *out){
  COUNT(snapshot_attempts);
@@ -238,22 +278,24 @@ static unsigned char gate_inner(void *controller,void *actor){
  record_metric(2,relation_start);
  if(relationships_requested)InterlockedIncrement64(&relation_values[relation]);
  if(relation!=2&&relation!=3)return 0;
- unsigned char aim_mode;float shot_length;
- if(!COPY_AT(aim_mode,(uintptr_t)controller+0x10)||!COPY_AT(shot_length,(uintptr_t)controller+8))return 0;
- double length=shot_length;
- if(!isfinite(length)||length<1||length>1000000)return 0;
  LONG64 capsule_start=metric_stamp();found=native_capsule(player.pawn);record_metric(3,capsule_start);
  if(!found){COUNT(no_player);return 0;}
  double p[3];memcpy(p,player_position,24);
- _Alignas(16) double transform[12]={0};
+ _Alignas(16) double previous[12],transform[12]={0};
+ if(!COPY_AT(previous,(uintptr_t)controller+0x20))return 0;
  LONG64 aim_start=metric_stamp();
- get_aim(actor,transform,aim_mode);
+ // Shot preparation may replace the mode after this hook. It writes 0/1;
+ // preserve an existing non-boolean mode if preparation takes another path.
+ get_aim(actor,transform,0);
+ int hit=predicted_intersection(previous,transform,p,radius,halfheight);
+ if(!hit){get_aim(actor,transform,1);hit=predicted_intersection(previous,transform,p,radius,halfheight);}
+ unsigned char existing_mode;
+ if(!hit&&COPY_AT(existing_mode,(uintptr_t)controller+0x10)&&existing_mode>1){
+  get_aim(actor,transform,existing_mode);
+  hit=predicted_intersection(previous,transform,p,radius,halfheight);
+ }
  record_metric(1,aim_start);
- double x=transform[0],y=transform[1],z=transform[2],w=transform[3];
- double norm=x*x+y*y+z*z+w*w;
- if(!isfinite(norm)||fabs(norm-1)>0.02)return 0;
- double direction[3]={1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)};
- if(!intersects(transform+4,direction,length,p,radius+SAFETY_MARGIN_CM,halfheight+SAFETY_MARGIN_CM))return 0;
+ if(!hit)return 0;
  if(relationships_requested)InterlockedIncrement64(&withheld_values[relation]);
  COUNT(blocked);return 1;
 }
@@ -263,7 +305,12 @@ static unsigned char gate(void *controller,void *actor){ LONG64 t=metric_stamp()
 #endif
 static int initialize(void *L){
  (void)L;if(InterlockedCompareExchange(&once,1,0))return 0;
- GetModuleFileNameA(self,log_path,MAX_PATH);char *slash=strrchr(log_path,'\\');if(!slash)return 0;
+ DWORD path_len=GetModuleFileNameA(self,log_path,MAX_PATH);
+ if(!path_len||path_len>=MAX_PATH)return 0;
+ char *slash=strrchr(log_path,'\\');if(!slash)return 0;
+ size_t prefix=(size_t)(slash+1-log_path);
+ // The INI has the longest sibling name. Reject paths that cannot fit.
+ if(prefix+sizeof("PlayerObstructionHoldFire.ini")>MAX_PATH)return 0;
  strcpy(slash+1,"PlayerObstructionHoldFire.log");
  QueryPerformanceFrequency(&perf_frequency);strcpy(metrics_path,log_path);strcpy(strrchr(metrics_path,'\\')+1,"native_metrics.csv");
  char ini[MAX_PATH];strcpy(ini,log_path);strcpy(strrchr(ini,'\\')+1,"PlayerObstructionHoldFire.ini");
@@ -278,7 +325,7 @@ static int initialize(void *L){
  if(metrics_enabled){FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,reserved\n");fclose(mf);}}
  if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
  game_base=(uintptr_t)GetModuleHandleW(NULL);
- if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.3-relationship-test. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.4-prediction-test. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
  get_ready=(void*)(game_base+0x44041c);get_relation_identity=(void*)(game_base+0x4d61a4);get_relation=(void*)(game_base+0x235809b);get_aim=(void*)(game_base+0xa66c56);
  get_controller=(void*)(game_base+0x2432506);get_pawn=(void*)(game_base+0x2f8c936);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
  if(memcmp(hook,expected_hook,8)){log_message("REFUSED: pre-shot instruction mismatch.");return 0;}
@@ -290,7 +337,7 @@ static int initialize(void *L){
  FlushInstructionCache(GetCurrentProcess(),cave,sizeof(stub));
  unsigned char patch[8];memcpy(patch,expected_hook,8);patch[0]=0xe8;int32_t delta=(int32_t)((uintptr_t)cave-((uintptr_t)hook+5));memcpy(patch+1,&delta,4);
  HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch,expected_hook))goto fail;
- worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.3-relationship-test guarded memory reads enabled; per-shot native player lookup.");return 0;
+ worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.4-prediction-test conservative shot prediction; guarded memory reads enabled.");return 0;
 fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
@@ -347,6 +394,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID reserved){
 int main(void){
  int cases=0;double o[]={0,0,0},d[]={1,0,0},p[]={500,0,0},length=1000,r=40,h=90;
  CHECK(1);p[1]=100;CHECK(0);p[1]=40;CHECK(1);p[1]=40.001;CHECK(0);
+ p[1]=0;r=h=80;CHECK(1);p[1]=81;CHECK(0);p[1]=0;r=40;h=90;
  p[0]=-100;p[1]=0;CHECK(0);p[0]=1100;CHECK(0);p[0]=1039;CHECK(1);
  p[0]=500;p[2]=89;CHECK(1);p[2]=91;CHECK(0);p[2]=0;
  p[0]=0;CHECK(1);p[0]=500;length=400;CHECK(0);
@@ -363,8 +411,8 @@ static unsigned char npc_test[0x700],pc_test[0x700],pawn_test[0x700],cap_test[0x
 static unsigned char items_test[24*4];static uintptr_t chunks_test[1];static int missing;
 static uintptr_t mock_controller(void *ctx,int i){return ctx==npc_test && i==0 && !missing?(uintptr_t)pc_test:0;}
 static uintptr_t mock_pawn(void *pc){return pc==pc_test?(uintptr_t)pawn_test:0;}
-static unsigned char npc_gameplay_test[32],shot_test[32];
-static int aim_calls,relation_calls;static unsigned char test_relation=2,test_ready;
+static unsigned char npc_gameplay_test[32],shot_test[0x100];
+static int aim_calls,relation_calls,mode1_override,mode2_override;static unsigned char test_relation=2,test_ready;
 static double aim_y;
 static unsigned char mock_ready(void *c){(void)c;return test_ready;}
 static uintptr_t mock_relation_identity(void *obj){
@@ -374,7 +422,8 @@ static unsigned char mock_relation(uintptr_t a,uintptr_t b){
  relation_calls++;return a==0x1111222233334444ULL && b==0x5555666677778888ULL?test_relation:0;
 }
 static void *mock_aim(void *a,void *out,unsigned char mode){
- (void)a;(void)mode;aim_calls++;double *t=out;t[3]=1;t[4]=-200;t[5]=aim_y;return out;
+ (void)a;aim_calls++;double *t=out;t[3]=1;t[4]=-200;
+ t[5]=((mode==1&&mode1_override)||(mode==2&&mode2_override))?0:aim_y;return out;
 }
 #define EXPECT(x) do{if(!(x)){printf("Native test failure line %d\n",__LINE__);return 1;}cases++;}while(0)
 int main(void){
@@ -428,6 +477,8 @@ int main(void){
  *(unsigned*)(npc_gameplay_test+16)=456;
  *(uintptr_t*)(vt_test+0xaa0)=game_base+0xa66c56;
  *(float*)(shot_test+8)=1000;
+ *(double*)(shot_test+0x20+3*8)=1;
+ *(double*)(shot_test+0x20+4*8)=-200;
  test_ready=7;EXPECT(gate_inner(shot_test,npc_test)==7 && relation_calls==0 && aim_calls==0);test_ready=0;
  *(uintptr_t*)(cap_test+0x10)=999;
  LONG64 capsule_count=metrics[3].count;
@@ -436,15 +487,26 @@ int main(void){
  *(uintptr_t*)(cap_test+0x10)=456;
  EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==1);
  test_relation=3;EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==2);
- aim_y=1000;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==3);aim_y=0;
- test_relation=0;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==3);
- test_relation=2;EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==4);
- *(float*)(shot_test+8)=NAN;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==4);
- *(float*)(shot_test+8)=1000;
+ aim_y=1000;*(double*)(shot_test+0x20+5*8)=1000;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==4);
+ aim_y=0;*(double*)(shot_test+0x20+5*8)=0;
+ test_relation=0;EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==4);
+ test_relation=2;EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==5);
  int previous_relations=relation_calls;*(uintptr_t*)(vt_test+0xaa0)=0;
- EXPECT(gate_inner(shot_test,npc_test)==0 && relation_calls==previous_relations && aim_calls==4);
+ EXPECT(gate_inner(shot_test,npc_test)==0 && relation_calls==previous_relations && aim_calls==5);
  *(uintptr_t*)(vt_test+0xaa0)=game_base+0xa66c56;
  missing=1;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_calls==previous_relations);missing=0;
+ // The actual shot may blend a clear current line with the prior transform.
+ aim_y=200;*(double*)(shot_test+0x20+5*8)=-200;
+ EXPECT(gate_inner(shot_test,npc_test)==1);
+ aim_y=1000;*(double*)(shot_test+0x20+5*8)=1000;mode1_override=1;
+ int prior_aim_calls=aim_calls;
+ EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==prior_aim_calls+2);
+ mode1_override=0;aim_y=0;*(double*)(shot_test+0x20+5*8)=0;
+ aim_y=1000;*(double*)(shot_test+0x20+5*8)=1000;mode2_override=1;shot_test[0x10]=2;
+ prior_aim_calls=aim_calls;
+ EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==prior_aim_calls+3);
+ mode2_override=0;shot_test[0x10]=0;aim_y=0;*(double*)(shot_test+0x20+5*8)=0;
  // Identity keys must reach the engine relation routine; pointer arguments fail these checks.
  relationships_requested=1;test_relation=0;
  EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[0]==1 && withheld_values[0]==0);
