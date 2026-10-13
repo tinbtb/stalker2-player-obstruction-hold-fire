@@ -1,8 +1,12 @@
-param([string]$ZigPath = '',[string]$Python = 'python')
+param([string]$ZigPath = '',[string]$Python = 'python',[string]$GameExe = '')
 $ErrorActionPreference = 'Stop'
 if (!$ZigPath) { $ZigPath = Join-Path $PSScriptRoot '.tools/zig-x86_64-windows-0.15.2/zig.exe' }
 $ZigPath = (Resolve-Path -LiteralPath $ZigPath).Path
 if ((& $ZigPath version).Trim() -ne '0.15.2') { throw 'Requires Zig 0.15.2' }
+if ($GameExe) {
+ & $Python (Join-Path $PSScriptRoot 'scripts/verify_game_sites.py') $GameExe
+ if ($LASTEXITCODE) { throw 'Game hook signature verification failed' }
+}
 $captureFlags = @('-DFRAME_CAPTURE')
 $build = Join-Path $PSScriptRoot 'build'
 New-Item -ItemType Directory -Force $build | Out-Null

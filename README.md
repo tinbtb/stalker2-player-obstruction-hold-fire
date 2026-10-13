@@ -1,97 +1,87 @@
-# Player Obstruction Hold Fire — v0.4.4-prediction-test
+# Player Obstruction Hold Fire — v0.4.8-focused-enemy-test2
 
 [Releases / Завантаження / Скачать](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases)
 
-```ini
-[Debug]
-EnableHoldFire=1
-EnableMetrics=0
-CaptureEngineFrames=0
-CaptureRelationships=0
-```
-
 ## English
 
-Neutral/friendly NPCs hold fire when you obstruct their predicted shot (capsule +
-40 cm margin). **AI-generated code: OpenAI Codex, directed by tinbtb.** Native test
-builds were tested in-game; this prediction build completed one mixed NPC test.
-It may also pause NPC fire when you stand behind their intended target. UE4SS is not required.
-For other mods, the author uses its build from [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
+**AI-generated code: OpenAI Codex, directed by tinbtb.** Neutral/friendly NPCs
+hold fire when you obstruct their predicted shot (player capsule + 40 cm).
+NPCs targeting you can retaliate even if their relationship remains neutral.
+Unknown targets allow firing. Neutral retaliation and hold/resume were tested;
+Friendly/hostile regression tests for this version remain pending.
 
-**Install:** close the game and disable old ASI/UE4SS copies of this mod. Copy the ASI, INI and README into `Stalker2/Binaries/Win64`. The with-loader ZIP includes optional
-Ultimate ASI Loader 9.7.4 x64 as `winhttp.dll`: put it in Win64 only if that file
-is absent. **Do not overwrite existing proxy DLLs.** Any compatible x64 ASI loader
-may be used; place ASI and INI together in its plugin folder. An ASI-only ZIP is
-available. Install exactly one copy.
+Copy the ZIP contents directly into `Stalker2/Binaries/Win64`; disable older
+ASI/UE4SS copies of this mod. The with-loader ZIP includes optional Ultimate ASI
+Loader 9.7.4 x64 as `winhttp.dll`: use it only if that file is absent.
+**Do not overwrite an existing proxy DLL.** Any compatible x64 ASI loader may
+be used; keep ASI and INI together in its plugin folder. Install one copy.
+UE4SS is not required; for other mods the author uses its build from
+[Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
-**Settings:** edit the adjacent INI and restart. `EnableHoldFire=0` disables
-protection for a control run. `EnableMetrics=1` writes counters/timings to
-`native_metrics.csv`. `CaptureEngineFrames=1` writes game-thread tick intervals to
-`engine_frames.csv` and enables metrics; these are not GPU/display frame timings.
-`CaptureRelationships=1` adds raw relationship counters and enables metrics.
-Diagnostics are **off by default**. Preserve logs before another diagnostic run.
+Edit the adjacent INI and restart: `EnableHoldFire=0` disables protection;
+`EnableMetrics=1` writes `native_metrics.csv`; `CaptureEngineFrames=1` adds
+`engine_frames.csv` (game-thread intervals, not GPU/display timings);
+`CaptureRelationships=1` adds relationship/focus counters and `focused_targets.csv`.
+Both capture options also enable metrics. Diagnostics default to **off**.
+Preserve logs between runs. Startup log: ACTIVE = enabled, REFUSED = not installed.
 
-The startup log should say ACTIVE; REFUSED means incompatible EXE/conflict.
-In-flight bullets, wider dispersion and other damage can still hurt you. Invalid
-data permits the original shot. To uninstall, close the game and remove ASI/INI;
-remove the optional loader only if no other mod needs it. Loader license: `Ultimate-ASI-Loader-LICENSE.txt`.
+Already-fired bullets, spread, ricochets and explosives remain dangerous.
+The conservative check may hold fire while you are behind the intended target.
+Unknown/invalid data allows firing; unexplained long pauses remain under investigation.
+To uninstall, close the game and remove ASI/INI; remove the loader only if unused
+by other mods. Loader license: `Ultimate-ASI-Loader-LICENSE.txt`.
 
 ## Українська
 
-Нейтральні та дружні NPC припиняють вогонь, коли ви перекриваєте прогнозовану
-траєкторію пострілу (капсула + 40 см). **Код згенеровано ШІ: OpenAI Codex під
-керівництвом tinbtb.** Новий прогноз пройшов один змішаний тест у грі. NPC можуть
-утримувати вогонь і тоді, коли ви стоїте за їхньою ціллю.
-UE4SS не потрібен. Для інших модів автор використовує його збірку
+**Код згенеровано ШІ: OpenAI Codex під керівництвом tinbtb.** Нейтральні/дружні
+NPC утримують вогонь, коли ви перекриваєте прогнозовану траєкторію (капсула + 40 см).
+NPC, чия ціль — ви, можуть стріляти у відповідь навіть за нейтрального ставлення.
+За невідомої цілі стрільбу дозволено. Помсту нейтральних NPC і зупинку/відновлення
+вогню перевірено; перевірка дружніх/ворожих NPC для цієї версії ще очікується.
+
+Скопіюйте вміст ZIP у `Stalker2/Binaries/Win64`; вимкніть старі ASI/UE4SS-копії
+цього моду. Необов'язковий завантажувач `winhttp.dll` (Ultimate ASI Loader 9.7.4)
+додавайте лише якщо такого файлу немає. **Не замінюйте наявні проксі-DLL.**
+Підійде будь-який сумісний x64 ASI-завантажувач: ASI та INI мають бути разом.
+Залиште одну копію. UE4SS не потрібен; для інших модів автор використовує збірку
 з [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
-**Встановлення:** закрийте гру й вимкніть старі ASI/UE4SS-копії цього моду.
-Скопіюйте ASI, INI та README у `Stalker2/Binaries/Win64`. Архів із завантажувачем містить
-необов'язковий Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: додайте його у Win64,
-лише якщо такого файлу немає. **Не замінюйте наявні проксі-DLL.** Можна використати
-будь-який сумісний x64 ASI-завантажувач; покладіть ASI та INI разом у його теку
-модулів. Є архів без завантажувача. Залиште лише одну копію.
+Змініть INI та перезапустіть гру: `EnableHoldFire=0` вимикає захист;
+`EnableMetrics=1` записує метрики; `CaptureEngineFrames=1` — інтервали ігрового
+потоку, а не GPU; `CaptureRelationships=1` — відносини, цілі й зразки у
+`focused_targets.csv`. Обидва режими захоплення вмикають метрики. Діагностику
+**типово вимкнено**. Зберігайте журнали. ACTIVE — мод працює; REFUSED — не встановлено.
 
-**Налаштування:** змініть INI поруч з ASI та перезапустіть гру. `EnableHoldFire=0`
-вимикає захист для контрольного запуску. `EnableMetrics=1` записує лічильники й час
-виконання у `native_metrics.csv`. `CaptureEngineFrames=1` записує інтервали тактів
-ігрового потоку в `engine_frames.csv` і вмикає метрики; це не час GPU чи відображення
-кадрів. `CaptureRelationships=1` додає лічильники відносин і вмикає метрики.
-Діагностику **типово вимкнено**. Зберігайте журнали між тестами.
-
-У стартовому журналі має бути ACTIVE; REFUSED означає несумісний EXE або конфлікт.
-Кулі в польоті, більший розкид та інша шкода залишаються небезпечними. Некоректні
-дані дозволяють звичайний постріл. Для видалення закрийте гру й видаліть ASI/INI;
-завантажувач видаляйте лише якщо він не потрібен іншим модам. Ліцензія — `Ultimate-ASI-Loader-LICENSE.txt`.
+Кулі в польоті, розкид, рикошети й вибухи залишаються небезпечними. Мод може
+утримувати вогонь і коли ви стоїте за ціллю. За невідомих/некоректних даних
+стрільбу дозволено; причини тривалих пауз ще досліджуються. Для видалення закрийте
+гру й видаліть ASI/INI; завантажувач — лише якщо він не потрібен іншим модам.
 
 ## Русский
 
-Нейтральные и дружественные NPC прекращают огонь, когда вы перекрываете
-прогнозируемую траекторию выстрела (капсула + 40 см). **Код создан ИИ: OpenAI Codex
-под руководством tinbtb.** Новый прогноз прошёл один смешанный тест в игре. NPC
-могут удерживать огонь и когда вы стоите за их целью.
-UE4SS не требуется. Для других модов автор использует его сборку
+**Код создан ИИ: OpenAI Codex под руководством tinbtb.** Нейтральные/дружественные
+NPC удерживают огонь, когда вы перекрываете прогнозируемую траекторию (капсула + 40 см).
+NPC, чья цель — вы, могут стрелять в ответ даже при нейтральном отношении.
+При неизвестной цели стрельба разрешена. Ответный огонь нейтральных NPC и
+остановка/возобновление проверены; проверки дружественных/враждебных NPC ещё ожидаются.
+
+Скопируйте содержимое ZIP в `Stalker2/Binaries/Win64`; отключите старые ASI/UE4SS-копии
+этого мода. Необязательный загрузчик `winhttp.dll` (Ultimate ASI Loader 9.7.4)
+добавляйте только если такого файла нет. **Не заменяйте существующие прокси-DLL.**
+Подойдёт любой совместимый x64 ASI-загрузчик: ASI и INI должны лежать вместе.
+Оставьте одну копию. UE4SS не требуется; для других модов автор использует сборку
 из [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
-**Установка:** закройте игру и отключите старые ASI/UE4SS-копии этого мода.
-Скопируйте ASI, INI и README в `Stalker2/Binaries/Win64`. Архив с загрузчиком включает
-необязательный Ultimate ASI Loader 9.7.4 x64 — `winhttp.dll`: добавьте его в Win64,
-только если такого файла нет. **Не заменяйте существующие прокси-DLL.** Можно
-использовать любой совместимый x64 ASI-загрузчик; разместите ASI и INI вместе в его
-папке плагинов. Есть архив без загрузчика. Оставьте одну копию.
+Измените INI и перезапустите игру: `EnableHoldFire=0` отключает защиту;
+`EnableMetrics=1` записывает метрики; `CaptureEngineFrames=1` — интервалы игрового
+потока, не GPU; `CaptureRelationships=1` — отношения, цели и образцы в
+`focused_targets.csv`. Оба режима захвата включают метрики. Диагностика
+**по умолчанию выключена**. Сохраняйте журналы. ACTIVE — мод работает; REFUSED — не установлен.
 
-**Настройки:** измените INI рядом с ASI и перезапустите игру. `EnableHoldFire=0`
-отключает защиту для контрольного запуска. `EnableMetrics=1` записывает счётчики и
-время выполнения в `native_metrics.csv`. `CaptureEngineFrames=1` записывает интервалы
-тактов игрового потока в `engine_frames.csv` и включает метрики; это не время GPU
-или отображения кадров. `CaptureRelationships=1` добавляет счётчики отношений
-и включает метрики. Диагностика **по умолчанию выключена**. Сохраняйте журналы
-между тестами.
-
-В стартовом журнале должно быть ACTIVE; REFUSED означает несовместимый EXE или
-конфликт. Летящие пули, больший разброс и другой урон остаются опасными. Некорректные
-данные разрешают обычный выстрел. Для удаления закройте игру и удалите ASI/INI;
-загрузчик удаляйте только если он не нужен другим модам. Лицензия — `Ultimate-ASI-Loader-LICENSE.txt`.
+Летящие пули, разброс, рикошеты и взрывы остаются опасными. Мод может удерживать
+огонь и когда вы стоите за целью. При неизвестных/некорректных данных стрельба
+разрешена; причины длительных пауз ещё исследуются. Для удаления закройте игру
+и удалите ASI/INI; загрузчик — только если он не нужен другим модам.
 
 ## EXE / SHA-256
 

@@ -14,6 +14,7 @@ static int worker_ready,hold_fire_enabled=1,metrics_enabled,frames_requested,rel
 static unsigned char *cave;
 static char log_path[MAX_PATH];
 static const unsigned char expected_hook[8]={0xe8,0x9b,0x3d,0xe3,0xff,0x84,0xc0,0x75};
+static const unsigned char expected_focus_getter[8]={0x56,0x57,0x48,0x83,0xec,0x48,0x48,0x8b};
 static const unsigned char expected_sha[32]={0x61,0xbc,0x1e,0x03,0x07,0x40,0xce,0xbc,0x30,0xcf,0x1d,0xad,0x0c,0x86,0xcf,0x65,0xe3,0x9e,0x12,0xff,0x05,0x00,0x22,0x58,0x21,0xd6,0x84,0x18,0x1e,0x08,0xd5,0x6b};
 static void log_message(const char *s) {
  FILE *f=fopen(log_path,"w"); if(f){fprintf(f,"%s\n",s);fclose(f);}
@@ -177,6 +178,35 @@ static uintptr_t (*get_relation_identity)(void*);
 static unsigned char (*get_relation)(uintptr_t,uintptr_t);
 static volatile LONG64 relation_values[256],withheld_values[256];
 static void *(*get_aim)(void*,void*,unsigned char);
+static uintptr_t (*get_focused_enemy)(void*);
+enum { FOCUS_UNAVAILABLE,FOCUS_NONE,FOCUS_PLAYER,FOCUS_OTHER };
+static volatile LONG64 focus_values[4];
+typedef struct { LONG64 check;uintptr_t shooter,target,player;unsigned relation,status; } FocusSample;
+static FocusSample focus_samples[128];static volatile LONG focus_samples_count;
+static LONG focus_samples_written;static uintptr_t last_focus_shooter,last_focus_target;
+static int native_focus(void *actor,uintptr_t gameplay,uintptr_t player,uintptr_t *target){
+ uintptr_t proxy,storage,accessor,vt,getter;
+ *target=0;
+ // Validate the input chain used by the engine GetFocusedEnemy implementation.
+ if(!COPY_AT(proxy,gameplay+0x660)||!proxy||!COPY_AT(storage,proxy+0x38)||!storage||
+    !COPY_AT(accessor,storage+0x50)||!accessor||!COPY_AT(vt,accessor)||!vt||
+    !COPY_AT(getter,vt+0x28)||!getter)return FOCUS_UNAVAILABLE;
+ // Engine getter manages its scoped data reference and resolves the weak actor
+ // reference, checking UObject index, serial number and destruction flags.
+ *target=get_focused_enemy(actor);
+ return !*target?FOCUS_NONE:*target==player?FOCUS_PLAYER:FOCUS_OTHER;
+}
+static void record_focus(void *actor,uintptr_t target,uintptr_t player,unsigned relation,unsigned status){
+ if(!relationships_requested)return;
+ InterlockedIncrement64(&focus_values[status]);
+ LONG n=InterlockedCompareExchange(&focus_samples_count,0,0);
+ LONG64 check=InterlockedCompareExchange64(&checks,0,0);
+ if(n<128 && (n==0||(n<32&&((uintptr_t)actor!=last_focus_shooter||target!=last_focus_target))||!(check&127))){
+  FocusSample sample={check,(uintptr_t)actor,target,player,relation,status};
+  focus_samples[n]=sample;InterlockedIncrement(&focus_samples_count);
+  last_focus_shooter=(uintptr_t)actor;last_focus_target=target;
+ }
+}
 static int valid_transform(const double t[12]){
  double norm=t[0]*t[0]+t[1]*t[1]+t[2]*t[2]+t[3]*t[3];
  if(!isfinite(norm)||fabs(norm-1)>0.02)return 0;
@@ -278,6 +308,12 @@ static unsigned char gate_inner(void *controller,void *actor){
  record_metric(2,relation_start);
  if(relationships_requested)InterlockedIncrement64(&relation_values[relation]);
  if(relation!=2&&relation!=3)return 0;
+ uintptr_t focused_target;LONG64 focus_start=metric_stamp();
+ int focus=native_focus(actor,ng,player.pawn,&focused_target);record_metric(4,focus_start);
+ record_focus(actor,focused_target,player.pawn,relation,(unsigned)focus);
+ // Only a known different combatant can justify suppressing an obstructed shot.
+ // A player target or unknown target preserves the game's original firing.
+ if(focus!=FOCUS_OTHER)return 0;
  LONG64 capsule_start=metric_stamp();found=native_capsule(player.pawn);record_metric(3,capsule_start);
  if(!found){COUNT(no_player);return 0;}
  double p[3];memcpy(p,player_position,24);
@@ -323,12 +359,17 @@ static int initialize(void *L){
 #endif
  if(frames_requested)metrics_enabled=1;
  if(metrics_enabled){FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,reserved\n");fclose(mf);}}
+ if(relationships_requested){
+  char path[MAX_PATH];strcpy(path,log_path);strcpy(strrchr(path,'\\')+1,"focused_targets.csv");
+  FILE *f=fopen(path,"w");if(f){fprintf(f,"check,shooter,target,player,relation,status\n");fclose(f);}
+ }
  if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
  game_base=(uintptr_t)GetModuleHandleW(NULL);
- if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.4-prediction-test. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.8-focused-enemy-test2. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ get_focused_enemy=(void*)(game_base+0x6b6ea52);
  get_ready=(void*)(game_base+0x44041c);get_relation_identity=(void*)(game_base+0x4d61a4);get_relation=(void*)(game_base+0x235809b);get_aim=(void*)(game_base+0xa66c56);
  get_controller=(void*)(game_base+0x2432506);get_pawn=(void*)(game_base+0x2f8c936);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
- if(memcmp(hook,expected_hook,8)){log_message("REFUSED: pre-shot instruction mismatch.");return 0;}
+ if(memcmp(hook,expected_hook,8)||memcmp((void*)get_focused_enemy,expected_focus_getter,8)){log_message("REFUSED: pre-shot/focused-enemy instruction mismatch.");return 0;}
  cave=allocate_near((uintptr_t)hook);if(!cave){log_message("REFUSED: no near allocation.");return 0;}
  // Tail-call C with controller RDI and shooter RSI. Original CALL supplies ABI stack alignment.
  unsigned char stub[]={0x48,0x89,0xf9,0x48,0x89,0xf2,0x48,0xb8,0,0,0,0,0,0,0,0,0xff,0xe0};
@@ -337,22 +378,41 @@ static int initialize(void *L){
  FlushInstructionCache(GetCurrentProcess(),cave,sizeof(stub));
  unsigned char patch[8];memcpy(patch,expected_hook,8);patch[0]=0xe8;int32_t delta=(int32_t)((uintptr_t)cave-((uintptr_t)hook+5));memcpy(patch+1,&delta,4);
  HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch,expected_hook))goto fail;
- worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.4-prediction-test conservative shot prediction; guarded memory reads enabled.");return 0;
+ worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.8-focused-enemy-test2 conservative shot prediction; guarded memory reads enabled.");return 0;
 fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
+static void write_focus_samples(void){
+ if(!relationships_requested)return;
+ LONG n=InterlockedCompareExchange(&focus_samples_count,0,0);
+ if(n==focus_samples_written)return;
+ char path[MAX_PATH];strcpy(path,log_path);strcpy(strrchr(path,'\\')+1,"focused_targets.csv");
+ FILE *f=fopen(path,focus_samples_written?"a":"w");if(!f)return;
+ if(!focus_samples_written)fprintf(f,"check,shooter,target,player,relation,status\n");
+ for(LONG i=focus_samples_written;i<n;i++){
+  const FocusSample *s=&focus_samples[i];
+  fprintf(f,"%lld,%llx,%llx,%llx,%u,%u\n",s->check,(unsigned long long)s->shooter,
+   (unsigned long long)s->target,(unsigned long long)s->player,s->relation,s->status);
+ }
+ int ok=!ferror(f);if(fclose(f))ok=0;if(ok)focus_samples_written=n;
+}
 static void write_status(void){
- static const char *names[]={"native_player_identity","aim_transform","relation","player_capsule","unused4","native_gate_including_original","guarded_read_fault","get_player_controller","get_pawn","guarded_read"};
+ static const char *names[]={"native_player_identity","aim_transform","relation","player_capsule","focused_enemy","native_gate_including_original","guarded_read_fault","get_player_controller","get_pawn","guarded_read"};
  FILE *f=fopen(metrics_path,"a");
  InterlockedExchange64(&metrics[9].count,guarded_reads);
  InterlockedExchange64(&metrics[6].count,read_faults);
- if(f){for(int i=0;i<10;i++){if(i<4||i>=5)fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,0\n",
+ if(f){for(int i=0;i<10;i++){fprintf(f,"%llu,%s,%lld,%.3f,%.3f,%lld,%lld,%lld,%lld,%lld,%lld,0\n",
  (unsigned long long)GetTickCount64(),names[i],InterlockedCompareExchange64(&metrics[i].count,0,0),
  (double)InterlockedCompareExchange64(&metrics[i].total,0,0)*1e6/perf_frequency.QuadPart,
  (double)InterlockedCompareExchange64(&metrics[i].maximum,0,0)*1e6/perf_frequency.QuadPart,
  InterlockedCompareExchange64(&checks,0,0),InterlockedCompareExchange64(&blocked,0,0),
  InterlockedCompareExchange64(&snapshot_attempts,0,0),InterlockedCompareExchange64(&snapshot_successes,0,0),
  InterlockedCompareExchange64(&no_player,0,0),InterlockedCompareExchange64(&unsupported,0,0));}
+ if(relationships_requested){
+  const char *names[]={"focused_enemy_unavailable","focused_enemy_none","focused_enemy_player","focused_enemy_other"};
+  for(int i=0;i<4;i++)fprintf(f,"%llu,%s,%lld,0,0,0,0,0,0,0,0,0\n",
+    (unsigned long long)GetTickCount64(),names[i],InterlockedCompareExchange64(&focus_values[i],0,0));
+ }
  if(relationships_requested)for(int v=0;v<256;v++){
   LONG64 n=InterlockedCompareExchange64(&relation_values[v],0,0);
   LONG64 b=InterlockedCompareExchange64(&withheld_values[v],0,0);
@@ -360,6 +420,7 @@ static void write_status(void){
   if(b)fprintf(f,"%llu,withheld_relationship_%d,%lld,0,0,0,0,0,0,0,0,0\n",(unsigned long long)GetTickCount64(),v,b);
  }
  fclose(f);}
+ write_focus_samples();
 }
 static DWORD WINAPI worker(void *arg){
  (void)arg;initialize(NULL);
@@ -411,9 +472,12 @@ static unsigned char npc_test[0x700],pc_test[0x700],pawn_test[0x700],cap_test[0x
 static unsigned char items_test[24*4];static uintptr_t chunks_test[1];static int missing;
 static uintptr_t mock_controller(void *ctx,int i){return ctx==npc_test && i==0 && !missing?(uintptr_t)pc_test:0;}
 static uintptr_t mock_pawn(void *pc){return pc==pc_test?(uintptr_t)pawn_test:0;}
-static unsigned char npc_gameplay_test[32],shot_test[0x100];
+static unsigned char npc_gameplay_test[0x668],shot_test[0x100];
 static int aim_calls,relation_calls,mode1_override,mode2_override;static unsigned char test_relation=2,test_ready;
 static double aim_y;
+static unsigned char focus_proxy_test[0x40],focus_storage_test[0x58],focus_accessor_test[8],focus_vt_test[0x30];
+static uintptr_t focus_test_target=0xabcdef;static int focus_calls;
+static uintptr_t mock_focus(void *actor){focus_calls++;return actor==npc_test?focus_test_target:0;}
 static unsigned char mock_ready(void *c){(void)c;return test_ready;}
 static uintptr_t mock_relation_identity(void *obj){
  return obj==npc_gameplay_test?0x1111222233334444ULL:obj==gameplay_test?0x5555666677778888ULL:0;
@@ -473,6 +537,11 @@ int main(void){
  metrics_enabled=1;
  // Exercise the real gate: invalid capsules cannot affect hostile fast exits.
  get_ready=mock_ready;get_relation_identity=mock_relation_identity;get_relation=mock_relation;get_aim=mock_aim;
+ get_focused_enemy=mock_focus;
+ *(uintptr_t*)(npc_gameplay_test+0x660)=(uintptr_t)focus_proxy_test;
+ *(uintptr_t*)(focus_proxy_test+0x38)=(uintptr_t)focus_storage_test;
+ *(uintptr_t*)(focus_storage_test+0x50)=(uintptr_t)focus_accessor_test;
+ *(uintptr_t*)focus_accessor_test=(uintptr_t)focus_vt_test;*(uintptr_t*)(focus_vt_test+0x28)=1;
  *(uintptr_t*)(npc_test+0x650)=(uintptr_t)npc_gameplay_test;
  *(unsigned*)(npc_gameplay_test+16)=456;
  *(uintptr_t*)(vt_test+0xaa0)=game_base+0xa66c56;
@@ -507,6 +576,30 @@ int main(void){
  prior_aim_calls=aim_calls;
  EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==prior_aim_calls+3);
  mode2_override=0;shot_test[0x10]=0;aim_y=0;*(double*)(shot_test+0x20+5*8)=0;
+ // Provoked neutral/friend targets use the named native getter, before aim/capsule work.
+ int prior_aim=aim_calls,prior_focus=focus_calls;LONG64 prior_capsules=metrics[3].count;
+ focus_test_target=(uintptr_t)pawn_test;test_relation=2;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && focus_calls==prior_focus+1 && aim_calls==prior_aim && metrics[3].count==prior_capsules);
+ test_relation=3;EXPECT(gate_inner(shot_test,npc_test)==0 && focus_calls==prior_focus+2 && aim_calls==prior_aim);
+ test_relation=0;EXPECT(gate_inner(shot_test,npc_test)==0 && focus_calls==prior_focus+2 && aim_calls==prior_aim);
+ test_relation=2;focus_test_target=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && aim_calls==prior_aim);
+ focus_test_target=0xabcdef;
+ EXPECT(gate_inner(shot_test,npc_test)==1 && aim_calls==prior_aim+1);
+ prior_focus=focus_calls;*(uintptr_t*)(focus_proxy_test+0x38)=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && focus_calls==prior_focus);
+ *(uintptr_t*)(focus_proxy_test+0x38)=(uintptr_t)focus_storage_test;
+ *(uintptr_t*)(focus_vt_test+0x28)=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && focus_calls==prior_focus);
+ *(uintptr_t*)(focus_vt_test+0x28)=1;
+ relationships_requested=1;focus_test_target=(uintptr_t)pawn_test;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && focus_values[FOCUS_PLAYER]==1);
+ focus_test_target=0;EXPECT(gate_inner(shot_test,npc_test)==0 && focus_values[FOCUS_NONE]==1);
+ focus_test_target=0xabcdef;EXPECT(gate_inner(shot_test,npc_test)==1 && focus_values[FOCUS_OTHER]==1);
+ *(uintptr_t*)(focus_vt_test+0x28)=0;
+ EXPECT(gate_inner(shot_test,npc_test)==0 && focus_values[FOCUS_UNAVAILABLE]==1);
+ *(uintptr_t*)(focus_vt_test+0x28)=1;relationships_requested=0;
+ relation_values[2]=0;withheld_values[2]=0;
  // Identity keys must reach the engine relation routine; pointer arguments fail these checks.
  relationships_requested=1;test_relation=0;
  EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[0]==1 && withheld_values[0]==0);
@@ -514,6 +607,20 @@ int main(void){
  test_relation=3;EXPECT(gate_inner(shot_test,npc_test)==1 && relation_values[3]==1 && withheld_values[3]==1);
  test_relation=255;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[255]==1);
  relationships_requested=0;EXPECT(gate_inner(shot_test,npc_test)==0 && relation_values[255]==1);
+ // Every collected timing slot must be visible in the CSV, including focus slot 4.
+ char temp_directory[MAX_PATH],temp_metrics[MAX_PATH];
+ DWORD temp_length=GetTempPathA(MAX_PATH,temp_directory);
+ EXPECT(temp_length>0 && temp_length<MAX_PATH);
+ EXPECT(GetTempFileNameA(temp_directory,"phf",0,temp_metrics)!=0);
+ strcpy(metrics_path,temp_metrics);write_status();
+ FILE *csv=fopen(temp_metrics,"r");EXPECT(csv!=NULL);
+ char row[1024];int focus_row_found=0;LONG64 focus_row_count=-1;
+ while(fgets(row,sizeof(row),csv)){
+  char *field=strstr(row,",focused_enemy,");
+  if(field){focus_row_found=1;sscanf(field+strlen(",focused_enemy,"),"%lld",&focus_row_count);}
+ }
+ fclose(csv);DeleteFileA(temp_metrics);
+ EXPECT(focus_row_found && focus_row_count==metrics[4].count && focus_row_count>0);
  VirtualFree((void*)game_base,0,MEM_RELEASE);printf("%d native lookup scenarios passed\n",cases);return 0;
 }
 #endif
