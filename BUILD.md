@@ -17,9 +17,8 @@ Output ZIPs in dist/ have fixed metadata, checksums and source/binary manifests.
 Builds omit debug paths; release.json pins the verified ASI hash and packaging
 refuses a different binary. CI and published assets are compared byte-for-byte.
 
-The release's diagnostics-default changes are synthetic/smoke tested, without a
-separate in-game run of this exact release binary. Derived native code was tested
-in-game with diagnostics. Earlier UE4SS source is retained in historical tags.
+The exact 0.4.4 ASI was tested in a mixed in-game run with diagnostics enabled.
+Release-default diagnostics settings were verified by isolated smoke tests. Earlier UE4SS source is retained in historical tags.
 No raw game captures or tester installation data are published.
 
 The builder clears non-runtime PE timestamps and the .buildid PDB-identification

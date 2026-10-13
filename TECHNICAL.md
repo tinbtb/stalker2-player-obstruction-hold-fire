@@ -50,9 +50,8 @@ fit the path buffers.
 The gate cannot know the final target distance at this hook. It tests only
 as far as the player's far side, so it can withhold fire when the player is
 behind the intended target. Additional aim calculation may cost more for
-shots whose first mode misses. No in-game validation exists yet for this
-exact build; compare friendly, neutral, hostile and frame timings before
-sharing it as a release.
+shots whose first mode misses. One mixed in-game run covered hostile, neutral
+and friendly shooters. Its hook timing was small; it is not a matched FPS test.
 
 Metrics now separate `native_player_identity` from `player_capsule`. The former
 replaces the old combined `native_player_lookup`; compare their combined total

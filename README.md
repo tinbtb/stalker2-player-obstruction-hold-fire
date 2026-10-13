@@ -14,7 +14,7 @@ CaptureRelationships=0
 
 Neutral/friendly NPCs hold fire when you obstruct their predicted shot (capsule +
 40 cm margin). **AI-generated code: OpenAI Codex, directed by tinbtb.** Native test
-builds were tested in-game; this new prediction build needs gameplay validation.
+builds were tested in-game; this prediction build completed one mixed NPC test.
 It may also pause NPC fire when you stand behind their intended target. UE4SS is not required.
 For other mods, the author uses its build from [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
@@ -40,8 +40,8 @@ remove the optional loader only if no other mod needs it. Loader license: `Ultim
 
 Нейтральні та дружні NPC припиняють вогонь, коли ви перекриваєте прогнозовану
 траєкторію пострілу (капсула + 40 см). **Код згенеровано ШІ: OpenAI Codex під
-керівництвом tinbtb.** Попередні збірки перевірено у грі; новий прогноз ще потребує
-перевірки. NPC можуть утримувати вогонь і тоді, коли ви стоїте за їхньою ціллю.
+керівництвом tinbtb.** Новий прогноз пройшов один змішаний тест у грі. NPC можуть
+утримувати вогонь і тоді, коли ви стоїте за їхньою ціллю.
 UE4SS не потрібен. Для інших модів автор використовує його збірку
 з [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 
@@ -68,8 +68,8 @@ UE4SS не потрібен. Для інших модів автор викор�
 
 Нейтральные и дружественные NPC прекращают огонь, когда вы перекрываете
 прогнозируемую траекторию выстрела (капсула + 40 см). **Код создан ИИ: OpenAI Codex
-под руководством tinbtb.** Предыдущие сборки проверены в игре; новый прогноз ещё
-нужно проверить. NPC могут удерживать огонь и когда вы стоите за их целью.
+под руководством tinbtb.** Новый прогноз прошёл один смешанный тест в игре. NPC
+могут удерживать огонь и когда вы стоите за их целью.
 UE4SS не требуется. Для других модов автор использует его сборку
 из [Ultra+ Manager](https://theultraplace.com/tools/ultra-plus-manager/).
 

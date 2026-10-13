@@ -9,9 +9,12 @@ are checked before constructing adjacent INI and log names.
 
 The existing hook cannot know the prepared shot's final target distance. The
 conservative check can hold fire when the player is behind the intended target.
-It can also add aim work on Neutral/Friend shots. This exact build requires
-in-game behavior and performance testing before publication. Long pauses
-remain unresolved.
+It can also add aim work on Neutral/Friend shots. One mixed in-game run showed
+191 Neutral checks with 108 shots withheld, 1,103 Friend checks with 540 withheld,
+and 221 hostile checks with none withheld. The tester reported normal behavior.
+The longest hook call was 10.7 microseconds, with no guarded-read faults or
+dropped frame samples. This was not a matched FPS comparison. Long pauses
+remain unresolved; long frame gaps in this capture contained no hook calls.
 
 The exact prior 0.4.3 ASI was validated in separate hostile, friendly and
 neutral runs. That evidence does not establish the behavior of this build.
