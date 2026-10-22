@@ -1,3 +1,13 @@
+# v0.5.0-beta.1 — Startup compatibility and cleaner packages
+
+- Replace the whole-executable hash gate with one startup scan of relevant native functions, layout witnesses, call relationships, and global references.
+- Reject missing, changed, or ambiguous matches before installing hooks. Resolve the optional frame-capture hook as well.
+- Keep firing/focus policy and geometry unchanged; no runtime scanning or polling is added.
+- Put all supporting files, including the optional debug INI, under PlayerObstructionHoldFire/. Only the ASI and optional winhttp.dll remain at the ZIP root.
+- Read the new INI location first, with legacy adjacent-file fallback. Migrate custom settings when replacing a Vortex installation.
+
+Tested in-game on Steam v2.0.6: friendlies hold fire, enemies fire normally, and friendly-to-hostile transitions work. Future game updates still need testing. The historical release notes below describe the previous binary.
+
 # v0.4.8 — Fix provoked-neutral return fire (testing)
 
 - Use the game's GetFocusedEnemy getter: neutral/friendly NPCs targeting the player may fire even while their relationship stays neutral.
@@ -6,4 +16,4 @@
 
 Neutral retaliation and obstruction hold/resume were verified in-game. Friendly/hostile regression checks for this version remain pending. Long pauses and conservative behind-target suppression remain unresolved.
 
-Two flat ZIPs are provided: ASI-only and ASI with optional official winhttp.dll loader. Both include short EN/UA/RU instructions and checksums. The ASI is byte-identical to the tested 0.4.8-focused-enemy-test2 binary; its test identifier is retained.
+The previous release provided two flat ZIPs: ASI-only and ASI with optional official winhttp.dll loader. Both include short EN/UA/RU instructions and checksums. The ASI is byte-identical to the tested 0.4.8-focused-enemy-test2 binary; its test identifier is retained.

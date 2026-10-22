@@ -2,8 +2,25 @@
 
 ## Firing gate
 
-The exact supported EXE SHA-256/size and pre-shot CALL at RVA 0x60c67c are
-verified before patching. The original readiness result takes priority. Eligible
+The candidate resolves addresses once on the startup worker. Nineteen complete
+function/layout fingerprints retain member offsets, instructions, enum values,
+and internal branches while masking address-dependent RIP/relative operands.
+Seventeen native references, eleven references agreeing on four globals, the
+UObject chunk/count relationship, and the CapsuleComponent registration name
+must validate. Missing or ambiguous candidates disable hooks. Leaf functions
+without unwind entries are found in executable sections and disambiguated by
+validated callers. The checked-in profile supports builds without a game EXE.
+
+This is a conservative compatibility heuristic, not proof that every transitive
+callee or object layout is unchanged. Future game updates still need gameplay
+testing. Original RVAs below document the audited Steam v2.0.6 baseline, not
+runtime constants. Optional engine-frame capture uses resolved tick/cookie
+addresses too. Baseline offline resolution took about 0.8 seconds on the local
+machine; that is not an in-game startup benchmark. No scanning or compatibility
+validation is added to the firing hook; it reads cached resolved global addresses.
+The firing/focus policy and geometry remain unchanged.
+
+The pre-shot CALL originally at RVA 0x60c67c is verified before patching. The original readiness result takes priority. Eligible
 checks obtain the current player controller/pawn on the owning firing thread,
 validate UObject array membership/flags and gameplay identity, and verify the
 supported NPC aim implementation. No cross-shot UObject or relationship cache
@@ -81,17 +98,17 @@ implementation is identical between these builds; test2 exports the previously
 omitted focus timing row and adds a CSV-output regression test.
 
 These are targeted neutral tests, not matched FPS measurements. Friendly/hostile
-in-game regression for this version remains pending. Long pauses remain unresolved.
+in-game regression for this version passed. Long pauses remain unresolved.
 
-The builder runs 18 geometry, 61 native/gate/CSV, 10 frame-buffer/output and three
+The builder runs 18 geometry, 61 native/gate/CSV, 10 frame-buffer/output and four
 isolated unsupported-host/default tests. Optional -GameExe validates the actual
-shot/getter signatures and reflected getter/weak-resolver call chain. CI cannot
+startup resolution and synthetic mutation/relocation rejection checks. CI cannot
 include the proprietary game executable.
 
 ## Packaging
 
 Zig/loader versions and hashes are pinned. The builder strips non-runtime PE
-build identifiers and produces deterministic root-level ZIPs for Vortex, with
+build identifiers and produces deterministic ZIPs for Vortex, with only the ASI
+and optional loader at the root. Supporting files are under PlayerObstructionHoldFire/, with
 source/binary manifests and checksums. No logs, saves, installation identifiers,
-local paths or game files are published. The release ASI retains its tested
-0.4.8-focused-enemy-test2 identifier to preserve the exact validated binary.
+local paths or game files are published. Version 0.5.0-beta.1 passed in-game checks on Steam v2.0.6: friendly hold-fire, normal hostile firing, and friendly-to-hostile transitions. Earlier detailed timing evidence above applies to the previous build.

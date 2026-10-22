@@ -37,21 +37,24 @@ static void frame_record(LONG64 now){
 }
 static void frame_tick_end(uintptr_t cookie){
  // Preserve the original security-cookie check. Only our added work follows it.
- ((void(*)(uintptr_t))(game_base+0x2835d30))(cookie);
+ ((void(*)(uintptr_t))(game_base+resolved_rvas[HF_COOKIE]))(cookie);
  frame_record(stamp());
 }
 static void frame_init(void){
- char ini[MAX_PATH];strcpy(ini,log_path);strcpy(strrchr(ini,'\\')+1,"PlayerObstructionHoldFire.ini");
  strcpy(frame_csv,log_path);strcpy(strrchr(frame_csv,'\\')+1,"engine_frames.csv");
  strcpy(frame_log,log_path);strcpy(strrchr(frame_log,'\\')+1,"frame_capture.log");
- if(GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini)!=1){
+ if(GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini_path)!=1){
   frame_status("DISABLED: CaptureEngineFrames=0 (or INI absent). No frame hook installed.");return;
  }
  // Exact GameEngine::Tick single return epilogue. First 5 bytes are cookie CALL.
  // Next 3 bytes belong to MOVAPS and remain identical; no entry detour conflicts.
- const unsigned char expected[8]={0xe8,0xb5,0x93,0x32,0x02,0x0f,0x28,0xb4};
- unsigned char *hook=(unsigned char*)(game_base+0x50c976);
- if(memcmp(hook,expected,8)){frame_status("REFUSED: engine tick exit instructions differ; hold-fire remains active.");return;}
+ unsigned char expected[8];
+ unsigned char *hook=(unsigned char*)(game_base+resolved_rvas[HF_TICK]+1386);
+ memcpy(expected,hook,8);
+ int32_t delta_original;memcpy(&delta_original,hook+1,4);
+ if(hook[0]!=0xe8 || (uintptr_t)(hook+5)+delta_original!=game_base+resolved_rvas[HF_COOKIE]){
+  frame_status("REFUSED: resolved tick CALL relationship changed.");return;
+ }
  frame_cave=allocate_near((uintptr_t)hook);
  if(!frame_cave){frame_status("REFUSED: no near allocation for capture.");return;}
  // The existing CALL supplies stack alignment/shadow space. Tail-call normal C ABI.

@@ -5,34 +5,33 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+#include "address_resolver.h"
 
-// This is an exact-build proof of concept; no Unreal SDK or Lua ABI imports.
+// Startup-validated native implementation; no Unreal SDK or Lua ABI imports.
 static HMODULE self;
 static volatile LONG once;
 static int worker_ready,hold_fire_enabled=1,metrics_enabled,frames_requested,relationships_requested;
 #define COUNT(counter) do{if(metrics_enabled)InterlockedIncrement64(&(counter));}while(0)
 static unsigned char *cave;
 static char log_path[MAX_PATH];
-static const unsigned char expected_hook[8]={0xe8,0x9b,0x3d,0xe3,0xff,0x84,0xc0,0x75};
-static const unsigned char expected_focus_getter[8]={0x56,0x57,0x48,0x83,0xec,0x48,0x48,0x8b};
-static const unsigned char expected_sha[32]={0x61,0xbc,0x1e,0x03,0x07,0x40,0xce,0xbc,0x30,0xcf,0x1d,0xad,0x0c,0x86,0xcf,0x65,0xe3,0x9e,0x12,0xff,0x05,0x00,0x22,0x58,0x21,0xd6,0x84,0x18,0x1e,0x08,0xd5,0x6b};
+static uint32_t resolved_rvas[HF_PROFILE_COUNT];
+static uintptr_t resolved_globals[HF_GLOBAL_COUNT];
+static unsigned char expected_hook[8];
+static char ini_path[MAX_PATH];
+#ifdef NATIVE_TEST
+#define GLOBAL_ADDRESS(index,baseline) (game_base+(baseline))
+#define AIM_ADDRESS (game_base+0xa66c56)
+#else
+#define GLOBAL_ADDRESS(index,baseline) (resolved_globals[index])
+#define AIM_ADDRESS ((uintptr_t)get_aim)
+#endif
 static void log_message(const char *s) {
  FILE *f=fopen(log_path,"w"); if(f){fprintf(f,"%s\n",s);fclose(f);}
 }
-static int fingerprint(void) {
- wchar_t path[MAX_PATH]; DWORD n=GetModuleFileNameW(NULL,path,MAX_PATH);
- if(!n || n>=MAX_PATH)return 0;
- HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
- if(f==INVALID_HANDLE_VALUE)return 0;
- LARGE_INTEGER size; if(!GetFileSizeEx(f,&size)||size.QuadPart!=174798384){CloseHandle(f);return 0;}
- BCRYPT_ALG_HANDLE alg=NULL; BCRYPT_HASH_HANDLE hash=NULL; unsigned char result[32],buf[65536]; DWORD got; int ok=0;
- if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0)goto done;
- if(BCryptCreateHash(alg,&hash,NULL,0,NULL,0,0)<0)goto done;
- for(;;){if(!ReadFile(f,buf,sizeof(buf),&got,NULL))goto done;if(!got)break;if(BCryptHashData(hash,buf,got,0)<0)goto done;}
- if(BCryptFinishHash(hash,result,sizeof(result),0)<0)goto done;
- ok=!memcmp(result,expected_sha,32);
-done:
- if(hash)BCryptDestroyHash(hash);if(alg)BCryptCloseAlgorithmProvider(alg,0);CloseHandle(f);return ok;
+static void resolver_log(const char *format,...) {
+ char message[512];va_list args;va_start(args,format);
+ vsnprintf(message,sizeof(message),format,args);va_end(args);log_message(message);
 }
 static unsigned char *allocate_near(uintptr_t hook) {
  SYSTEM_INFO si;GetSystemInfo(&si);uintptr_t step=si.dwAllocationGranularity;
@@ -125,8 +124,8 @@ __declspec(noinline) static int safe_copy(void *destination,uintptr_t source,siz
 #define COPY_AT(dst, address) safe_copy(&(dst),(uintptr_t)(address),sizeof(dst))
 static uintptr_t object_item(int index){
  int count;uintptr_t chunks,chunk;
- if(!COPY_AT(count,game_base+0xa0e68e4)||index<0||index>=count)return 0;
- if(!COPY_AT(chunks,game_base+0xa0e68d0)||!chunks)return 0;
+ if(!COPY_AT(count,GLOBAL_ADDRESS(HF_OBJECT_COUNT,0xa0e68e4))||index<0||index>=count)return 0;
+ if(!COPY_AT(chunks,GLOBAL_ADDRESS(HF_OBJECT_CHUNKS,0xa0e68d0))||!chunks)return 0;
  if(!COPY_AT(chunk,chunks+(unsigned)(index>>16)*8)||!chunk)return 0;
  uintptr_t offset=(uintptr_t)(index&65535)*24;
  return chunk<=UINTPTR_MAX-offset?chunk+offset:0;
@@ -257,12 +256,12 @@ static int native_identity(void *actor,PlayerIdentity *out){
  if(!valid_object(pawn,0x658))return 0;
  uintptr_t pg;unsigned player_id,pg_id;
  if(!COPY_AT(pg,pawn+0x650)||!pg||!COPY_AT(pg_id,pg+16)||
-    !COPY_AT(player_id,game_base+0x9eec140)||pg_id!=player_id)return 0;
+    !COPY_AT(player_id,GLOBAL_ADDRESS(HF_PLAYER_ID,0x9eec140))||pg_id!=player_id)return 0;
  out->pawn=pawn;out->gameplay=pg;out->id=player_id;return 1;
 }
 static int native_capsule(uintptr_t pawn){
  uintptr_t cls,capsule,actual_cls;
- if(!COPY_AT(cls,game_base+0xa234940)||!cls)return 0;
+ if(!COPY_AT(cls,GLOBAL_ADDRESS(HF_CAPSULE_CLASS_PTR,0xa234940))||!cls)return 0;
  if(!COPY_AT(capsule,pawn+0x340))return 0;
  if(!valid_object(capsule,0x510)||!COPY_AT(actual_cls,capsule+0x10)||actual_cls!=cls){
   if(!COPY_AT(capsule,pawn+0x1c0)||!valid_object(capsule,0x510)||
@@ -297,7 +296,7 @@ static unsigned char gate_inner(void *controller,void *actor){
  uintptr_t npc=(uintptr_t)actor,ng,vt,aim;unsigned ng_id;
  if(npc==player.pawn)return 0;
  if(!COPY_AT(ng,npc+0x650)||!ng||!COPY_AT(ng_id,ng+16)||ng_id==player.id)return 0;
- if(!COPY_AT(vt,npc)||!vt||!COPY_AT(aim,vt+0xaa0)||aim!=game_base+0xa66c56){
+ if(!COPY_AT(vt,npc)||!vt||!COPY_AT(aim,vt+0xaa0)||aim!=AIM_ADDRESS){
   COUNT(unsupported);return 0;
  }
  // Relationships are fresh per shot. Hostiles never need capsule or aim work.
@@ -346,16 +345,20 @@ static int initialize(void *L){
  char *slash=strrchr(log_path,'\\');if(!slash)return 0;
  size_t prefix=(size_t)(slash+1-log_path);
  // The INI has the longest sibling name. Reject paths that cannot fit.
- if(prefix+sizeof("PlayerObstructionHoldFire.ini")>MAX_PATH)return 0;
+ if(prefix+sizeof("PlayerObstructionHoldFire\\PlayerObstructionHoldFire.ini")>MAX_PATH)return 0;
  strcpy(slash+1,"PlayerObstructionHoldFire.log");
  QueryPerformanceFrequency(&perf_frequency);strcpy(metrics_path,log_path);strcpy(strrchr(metrics_path,'\\')+1,"native_metrics.csv");
- char ini[MAX_PATH];strcpy(ini,log_path);strcpy(strrchr(ini,'\\')+1,"PlayerObstructionHoldFire.ini");
- hold_fire_enabled=GetPrivateProfileIntA("Debug","EnableHoldFire",1,ini)!=0;
- metrics_enabled=GetPrivateProfileIntA("Debug","EnableMetrics",0,ini)!=0;
- relationships_requested=GetPrivateProfileIntA("Debug","CaptureRelationships",0,ini)==1;
+ strcpy(ini_path,log_path);strcpy(strrchr(ini_path,'\\')+1,"PlayerObstructionHoldFire\\PlayerObstructionHoldFire.ini");
+ // Prefer the packaged subfolder, retaining existing root INIs on upgrades.
+ if(GetFileAttributesA(ini_path)==INVALID_FILE_ATTRIBUTES){
+  strcpy(ini_path,log_path);strcpy(strrchr(ini_path,'\\')+1,"PlayerObstructionHoldFire.ini");
+ }
+ hold_fire_enabled=GetPrivateProfileIntA("Debug","EnableHoldFire",1,ini_path)!=0;
+ metrics_enabled=GetPrivateProfileIntA("Debug","EnableMetrics",0,ini_path)!=0;
+ relationships_requested=GetPrivateProfileIntA("Debug","CaptureRelationships",0,ini_path)==1;
  if(relationships_requested)metrics_enabled=1;
 #ifdef FRAME_CAPTURE
- frames_requested=GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini)==1;
+ frames_requested=GetPrivateProfileIntA("Debug","CaptureEngineFrames",0,ini_path)==1;
 #endif
  if(frames_requested)metrics_enabled=1;
  if(metrics_enabled){FILE *mf=fopen(metrics_path,"w");if(mf){fprintf(mf,"system_uptime_ms,metric,count,total_us,max_us,checks,withheld,snapshot_attempts,snapshot_successes,unavailable_player,unsupported_aim,reserved\n");fclose(mf);}}
@@ -363,13 +366,22 @@ static int initialize(void *L){
   char path[MAX_PATH];strcpy(path,log_path);strcpy(strrchr(path,'\\')+1,"focused_targets.csv");
   FILE *f=fopen(path,"w");if(f){fprintf(f,"check,shooter,target,player,relation,status\n");fclose(f);}
  }
- if(!fingerprint()){log_message("REFUSED: unsupported executable SHA256/size. No patch installed.");return 0;}
  game_base=(uintptr_t)GetModuleHandleW(NULL);
- if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: v0.4.8-focused-enemy-test2. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
- get_focused_enemy=(void*)(game_base+0x6b6ea52);
- get_ready=(void*)(game_base+0x44041c);get_relation_identity=(void*)(game_base+0x4d61a4);get_relation=(void*)(game_base+0x235809b);get_aim=(void*)(game_base+0xa66c56);
- get_controller=(void*)(game_base+0x2432506);get_pawn=(void*)(game_base+0x2f8c936);unsigned char *hook=(unsigned char*)(game_base+0x60c67c);
- if(memcmp(hook,expected_hook,8)||memcmp((void*)get_focused_enemy,expected_focus_getter,8)){log_message("REFUSED: pre-shot/focused-enemy instruction mismatch.");return 0;}
+ SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+ if(!hf_resolve((HMODULE)game_base,resolved_rvas,resolved_globals,resolver_log)){
+  log_message("REFUSED: incompatible or ambiguous native layout. No patch installed.");return 0;
+ }
+ if(!hold_fire_enabled){worker_ready=1;log_message("CONTROL: startup-validated candidate. Hold-fire hook NOT installed; vanilla firing behavior.");return 0;}
+ get_focused_enemy=(void*)(game_base+resolved_rvas[HF_FOCUS]);
+ get_ready=(void*)(game_base+resolved_rvas[HF_READY]);get_relation_identity=(void*)(game_base+resolved_rvas[HF_IDENTITY]);
+ get_relation=(void*)(game_base+resolved_rvas[HF_RELATION]);get_aim=(void*)(game_base+resolved_rvas[HF_AIM]);
+ get_controller=(void*)(game_base+resolved_rvas[HF_CONTROLLER]);get_pawn=(void*)(game_base+resolved_rvas[HF_PAWN]);
+ unsigned char *hook=(unsigned char*)(game_base+resolved_rvas[HF_SHOT]+396);
+ memcpy(expected_hook,hook,8);int32_t original_call;memcpy(&original_call,hook+1,4);
+ if(hook[0]!=0xe8 || hook[5]!=0x84 || hook[6]!=0xc0 || hook[7]!=0x75 ||
+    (uintptr_t)(hook+5)+original_call!=(uintptr_t)get_ready){
+  log_message("REFUSED: resolved pre-shot CALL relationship changed.");return 0;
+ }
  cave=allocate_near((uintptr_t)hook);if(!cave){log_message("REFUSED: no near allocation.");return 0;}
  // Tail-call C with controller RDI and shooter RSI. Original CALL supplies ABI stack alignment.
  unsigned char stub[]={0x48,0x89,0xf9,0x48,0x89,0xf2,0x48,0xb8,0,0,0,0,0,0,0,0,0xff,0xe0};
@@ -378,7 +390,7 @@ static int initialize(void *L){
  FlushInstructionCache(GetCurrentProcess(),cave,sizeof(stub));
  unsigned char patch[8];memcpy(patch,expected_hook,8);patch[0]=0xe8;int32_t delta=(int32_t)((uintptr_t)cave-((uintptr_t)hook+5));memcpy(patch+1,&delta,4);
  HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)&gate,&pinned)||!patch_safely(hook,patch,expected_hook))goto fail;
- worker_ready=1;log_message("ACTIVE: experimental pre-shot obstruction gate. v0.4.8-focused-enemy-test2 conservative shot prediction; guarded memory reads enabled.");return 0;
+ worker_ready=1;log_message("ACTIVE: startup-validated candidate; 19 native fingerprints and references resolved once. Conservative shot prediction and guarded memory reads unchanged; no runtime scanning.");return 0;
 fail:
  VirtualFree(cave,0,MEM_RELEASE);cave=NULL;log_message("REFUSED: safe installation failed.");return 0;
 }
@@ -492,12 +504,12 @@ static void *mock_aim(void *a,void *out,unsigned char mode){
 #define EXPECT(x) do{if(!(x)){printf("Native test failure line %d\n",__LINE__);return 1;}cases++;}while(0)
 int main(void){
  int cases=0;metrics_enabled=1;QueryPerformanceFrequency(&perf_frequency);game_base=(uintptr_t)VirtualAlloc(NULL,0xa240000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);if(!game_base)return 2;
- *(uintptr_t*)(game_base+0xa0e68d0)=(uintptr_t)chunks_test;*(int*)(game_base+0xa0e68e4)=4;chunks_test[0]=(uintptr_t)items_test;
+ *(uintptr_t*)(GLOBAL_ADDRESS(HF_OBJECT_CHUNKS,0xa0e68d0))=(uintptr_t)chunks_test;*(int*)(GLOBAL_ADDRESS(HF_OBJECT_COUNT,0xa0e68e4))=4;chunks_test[0]=(uintptr_t)items_test;
  unsigned char *objs[]={npc_test,pc_test,pawn_test,cap_test};
  for(int i=0;i<4;i++){*(int*)(objs[i]+12)=i;*(uintptr_t*)(items_test+i*24)=(uintptr_t)objs[i];}
  *(uintptr_t*)npc_test=(uintptr_t)vt_test;*(uintptr_t*)(vt_test+0x198)=1;
- *(uintptr_t*)(pawn_test+0x650)=(uintptr_t)gameplay_test;*(unsigned*)(gameplay_test+16)=123;*(unsigned*)(game_base+0x9eec140)=123;
- *(uintptr_t*)(pawn_test+0x340)=(uintptr_t)cap_test;*(uintptr_t*)(cap_test+0x10)=456;*(uintptr_t*)(game_base+0xa234940)=456;
+ *(uintptr_t*)(pawn_test+0x650)=(uintptr_t)gameplay_test;*(unsigned*)(gameplay_test+16)=123;*(unsigned*)(GLOBAL_ADDRESS(HF_PLAYER_ID,0x9eec140))=123;
+ *(uintptr_t*)(pawn_test+0x340)=(uintptr_t)cap_test;*(uintptr_t*)(cap_test+0x10)=456;*(uintptr_t*)(GLOBAL_ADDRESS(HF_CAPSULE_CLASS_PTR,0xa234940))=456;
  *(double*)(cap_test+0x210)=1;*(double*)(cap_test+0x218)=1;*(double*)(cap_test+0x220)=1;
  *(float*)(cap_test+0x50c)=40;*(float*)(cap_test+0x508)=90;
  get_controller=mock_controller;get_pawn=mock_pawn;

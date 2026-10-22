@@ -7,5 +7,5 @@ log=p.with_name('PlayerObstructionHoldFire.log')
 for _ in range(100):
  if log.exists() and log.stat().st_size:break
  time.sleep(.05)
-assert log.read_text().startswith('REFUSED: unsupported executable SHA256/size.'), 'Host refusal missing'
+assert log.read_text().startswith('REFUSED: incompatible or ambiguous native layout.'), 'Host refusal missing'
 assert p.with_name('native_metrics.csv').exists()==(sys.argv[2]=='1'), 'Metrics file default mismatch'
