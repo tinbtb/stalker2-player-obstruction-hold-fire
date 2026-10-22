@@ -112,3 +112,7 @@ build identifiers and produces deterministic ZIPs for Vortex, with only the ASI
 and optional loader at the root. Supporting files are under PlayerObstructionHoldFire/, with
 source/binary manifests and checksums. No logs, saves, installation identifiers,
 local paths or game files are published. Version 0.5.0-beta.1 passed in-game checks on Steam v2.0.6: friendly hold-fire, normal hostile firing, and friendly-to-hostile transitions. Earlier detailed timing evidence above applies to the previous build.
+
+## Two-family beta.2
+
+See `COMPATIBILITY_FAMILIES.md` for the outlined aim helper, coherent family selection, and offline-only fixture evidence. The author confirmed the new ASI works in-game on Steam v2.0.6. Development-fixture gameplay remains untested; earlier detailed v0.5.0-beta.1 measurements describe that previous binary.

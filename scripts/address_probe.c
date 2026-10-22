@@ -7,13 +7,17 @@
 #include <string.h>
 #include "address_resolver.h"
 #include "address_profile.h"
+#include "address_profile_development.h"
 #include "pe_data_image.h"
 static void logger(const char *fmt,...) {
     va_list ap;va_start(ap,fmt);vprintf(fmt,ap);va_end(ap);puts("");
 }
 static BOOL resolve(unsigned char *image) {
     uint32_t rvas[HF_PROFILE_COUNT];uintptr_t globals[HF_GLOBAL_COUNT];
-    return hf_resolve((HMODULE)image,rvas,globals,logger);
+    BOOL ok=hf_resolve((HMODULE)image,rvas,globals,logger);
+    if(!ok)for(unsigned i=0;i<HF_GLOBAL_COUNT;i++)if(globals[i])ExitProcess(40);
+    if(!ok)for(unsigned i=0;i<HF_PROFILE_COUNT;i++)if(rvas[i])ExitProcess(41);
+    return ok;
 }
 int wmain(int argc,wchar_t **argv) {
     if(argc!=3)return 2;
@@ -30,11 +34,26 @@ int wmain(int argc,wchar_t **argv) {
         }
         VirtualFree(image,0,MEM_RELEASE);return ok?0:10;
     }
-    if(wcscmp(argv[1],L"--image") && wcscmp(argv[1],L"--leaf")){VirtualFree(image,0,MEM_RELEASE);return 2;}
+    if(wcscmp(argv[1],L"--image") && wcscmp(argv[1],L"--leaf") && wcscmp(argv[1],L"--outlined") && wcscmp(argv[1],L"--outlined-leaf")){VirtualFree(image,0,MEM_RELEASE);return 2;}
+    BOOL outlined=!wcscmp(argv[1],L"--outlined") || !wcscmp(argv[1],L"--outlined-leaf");
+    const HfProfile *profiles=outlined?dev_hf_profiles:hf_profiles;
+    const HfReference *edges=outlined?dev_hf_edges:hf_edges;
+    const HfReference *global_refs=outlined?dev_hf_global_refs:hf_global_refs;
+    unsigned edge_count=outlined?sizeof(dev_hf_edges)/sizeof(*dev_hf_edges):sizeof(hf_edges)/sizeof(*hf_edges);
+    unsigned global_count=outlined?sizeof(dev_hf_global_refs)/sizeof(*dev_hf_global_refs):sizeof(hf_global_refs)/sizeof(*hf_global_refs);
+    HfReference name_ref=outlined?dev_hf_capsule_name_ref:hf_capsule_name_ref;
     uint32_t rvas[HF_PROFILE_COUNT];uintptr_t globals[HF_GLOBAL_COUNT];
     ULONGLONG began=GetTickCount64();
     if(!hf_resolve((HMODULE)image,rvas,globals,logger))return 10;
     printf("Original data image resolved in %llu ms\n",GetTickCount64()-began);
+    if(outlined) {
+        uint32_t from=HF_AIM;
+        unsigned displacement=148,next=152;
+        int32_t delta;memcpy(&delta,image+rvas[from]+displacement,4);
+        uint32_t helper=rvas[from]+next+delta;
+        image[helper+5]^=1;if(resolve(image))return 30;image[helper+5]^=1;
+        image[rvas[from]+displacement]^=1;if(resolve(image))return 31;image[rvas[from]+displacement]^=1;
+    }
     /* Simulate a different executable identity without altering game logic. */
     IMAGE_DOS_HEADER *mapped_dos=(void *)image;
     IMAGE_NT_HEADERS64 *mapped_nt=(void *)(image+mapped_dos->e_lfanew);
@@ -60,9 +79,9 @@ int wmain(int argc,wchar_t **argv) {
     IMAGE_SECTION_HEADER *extra=&mapped_sections[mapped_nt->FileHeader.NumberOfSections];
     if((uintptr_t)(extra+1)-(uintptr_t)image>mapped_nt->OptionalHeader.SizeOfHeaders)return 15;
     uint32_t relocated=mapped_nt->OptionalHeader.SizeOfImage;
-    unsigned moved=!wcscmp(argv[1],L"--leaf")?HF_PAWN:HF_READY;
+    unsigned moved=(!wcscmp(argv[1],L"--leaf") || !wcscmp(argv[1],L"--outlined-leaf"))?HF_PAWN:HF_READY;
     uint32_t original=rvas[moved];
-    const HfProfile *profile=&hf_profiles[moved];
+    const HfProfile *profile=&profiles[moved];
     memcpy(image+relocated,image+original,profile->size);
     int32_t movement=(int32_t)(relocated-original);
     for(unsigned i=0;i<profile->mask_count;i++) {
@@ -70,8 +89,8 @@ int wmain(int argc,wchar_t **argv) {
         int32_t value;memcpy(&value,image+relocated+profile->masks[i].offset,4);
         value-=movement;memcpy(image+relocated+profile->masks[i].offset,&value,4);
     }
-    for(unsigned i=0;i<sizeof(hf_edges)/sizeof(*hf_edges);i++)if(hf_edges[i].to==moved) {
-        const HfReference *ref=&hf_edges[i];int32_t value;
+    for(unsigned i=0;i<edge_count;i++)if(edges[i].to==moved) {
+        const HfReference *ref=&edges[i];int32_t value;
         memcpy(&value,image+rvas[ref->from]+ref->displacement,4);value+=movement;
         memcpy(image+rvas[ref->from]+ref->displacement,&value,4);
     }
@@ -85,27 +104,27 @@ int wmain(int argc,wchar_t **argv) {
     mapped_nt->FileHeader.NumberOfSections++;mapped_nt->OptionalHeader.SizeOfImage+=0x10000;
     if(!hf_resolve((HMODULE)image,rvas,globals,logger) || rvas[moved]!=relocated)return 17;
     /* A masked relative displacement still has to satisfy the call graph. */
-    for(unsigned i=0;i<sizeof(hf_edges)/sizeof(*hf_edges);i++)if(hf_edges[i].to==moved) {
-        const HfReference *ref=&hf_edges[i];
+    for(unsigned i=0;i<edge_count;i++)if(edges[i].to==moved) {
+        const HfReference *ref=&edges[i];
         image[rvas[ref->from]+ref->displacement]^=1;
         if(resolve(image))return 18;
         image[rvas[ref->from]+ref->displacement]^=1;
         break;
     }
-    for(unsigned i=0;i<sizeof(hf_global_refs)/sizeof(*hf_global_refs);i++) {
-        const HfReference *ref=&hf_global_refs[i];int32_t value;
+    for(unsigned i=0;i<global_count;i++) {
+        const HfReference *ref=&global_refs[i];int32_t value;
         memcpy(&value,image+rvas[ref->from]+ref->displacement,4);value+=16;
         memcpy(image+rvas[ref->from]+ref->displacement,&value,4);
     }
     uintptr_t old_manager=globals[HF_PLAYER_ID];
     if(!hf_resolve((HMODULE)image,rvas,globals,logger) || globals[HF_PLAYER_ID]!=old_manager+16)return 19;
-    const HfReference *ref=&hf_global_refs[0];
+    const HfReference *ref=&global_refs[0];
     image[rvas[ref->from]+ref->displacement]^=8;
     if(resolve(image))return 20;
     /* A class registration name must not be silently remapped. */
     image[rvas[ref->from]+ref->displacement]^=8;
-    int32_t name_delta;memcpy(&name_delta,image+rvas[hf_capsule_name_ref.from]+hf_capsule_name_ref.displacement,4);
-    uint32_t name=rvas[hf_capsule_name_ref.from]+hf_capsule_name_ref.next+name_delta;
+    int32_t name_delta;memcpy(&name_delta,image+rvas[name_ref.from]+name_ref.displacement,4);
+    uint32_t name=rvas[name_ref.from]+name_ref.next+name_delta;
     image[name]^=1;if(resolve(image))return 21;image[name]^=1;
     mapped_dos->e_magic=0;if(resolve(image))return 22;
     puts("Resolver tests passed: identity, function/global relocation, altered code, ambiguity, call graph, manager agreement.");

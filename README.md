@@ -1,4 +1,6 @@
-# Player Obstruction Hold Fire — v0.5.0-beta.1
+# Player Obstruction Hold Fire — v0.5.0-beta.2
+
+The [two-family resolver](COMPATIBILITY_FAMILIES.md) validates both the Steam and development-only executable layouts offline. The author confirmed the new ASI works in-game on Steam v2.0.6. Development-fixture gameplay remains untested. Detailed behavior checks below were recorded for the earlier v0.5.0-beta.1 build.
 
 [Releases / Завантаження / Скачать](https://github.com/tinbtb/stalker2-player-obstruction-hold-fire/releases)
 

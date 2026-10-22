@@ -23,10 +23,18 @@ GLOBALS = {0xa0e68d0:0,0xa0e68e4:1,0x9eec140:2,0xa234940:3}
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
+    parser.add_argument('--family', choices=['steam','development'], default='steam')
     args = parser.parse_args()
+    global FUNCTIONS, LEAVES, GLOBALS
+    development = args.family == "development"
+    if development:
+        FUNCTIONS = dict(zip(FUNCTIONS, [0x6b64fa,0x2925e8,0x1f5e2e,0x23fc737,0x945640,0x262e3d2,0x20a1b3c,0x6b75d36,0x24c0372,0x20cf222,0x56e4e1a,0x75950c,0xb9a09a,0x121a764,0xe6cb12,0x746ac5a,0x9456da,0x5d5bca,0x2875190]))
+        LEAVES = {0x20a1b3c:20,0x24c0372:84,0x20cf222:15}
+        GLOBALS = {0xa0d7850:0,0xa0d7864:1,0x9edd140:2,0xa225890:3}
+
     raw = args.executable.read_bytes()
     # Fingerprints must be reviewed again before accepting a new compiler layout.
-    assert hashlib.sha256(raw).hexdigest() == '61bc1e030740cebc30cf1dad0c86cf65e39e12ff0500225821d684181e08d56b'
+    assert hashlib.sha256(raw).hexdigest() == ('2ecc5d19fe37f97e3f7f2467d652b299b5a47f010fa49fd803a49a4a6930a409' if development else '61bc1e030740cebc30cf1dad0c86cf65e39e12ff0500225821d684181e08d56b')
     pe = pefile.PE(data=raw,fast_load=True)
     pe.parse_data_directories(directories=[3])
     base = pe.OPTIONAL_HEADER.ImageBase
@@ -57,7 +65,7 @@ def main():
                         globals_.append((idx, off + ins.disp_offset, off + ins.size, GLOBALS[target]))
                     if target in FUNCTIONS.values():
                         edges.append((idx,off+ins.disp_offset,off+ins.size,list(FUNCTIONS.values()).index(target)))
-                    if name=='CAPSULE_CLASS' and ins.address-base==0x79b9b8:
+                    if name=='CAPSULE_CLASS' and off==180:
                         literal_ref=(idx,off+ins.disp_offset,off+ins.size,0)
                         literal=pe.get_data(target,len('CapsuleComponent')*2+2)
                         assert literal=='CapsuleComponent\0'.encode('utf-16le')
@@ -80,12 +88,39 @@ def main():
         lines += [f'static const HfMask masks_{idx}[] = ' + '{' + ','.join(f'{{{o},{s}}}' for o,s in masks) + '};']
         profiles.append('{' + f'"{name}",{len(data)},' + byte_array(anchor.ljust(32,b'\0')) + ',' + byte_array(anchor_mask)
                         + ',' + byte_array(hashlib.sha256(normalized).digest()) + f',masks_{idx},{len(masks)},{int(start in LEAVES)}' + '}')
+    # The second compiler layout outlines code that the first layout inlines.
+    # Fingerprint the entire helper; its address alone is never trusted.
+    if development:
+        helper_start = 0x2fedd1c
+        helper_end = ends[helper_start]
+        data = bytearray(pe.get_data(helper_start,helper_end-helper_start))
+        masks=[]
+        for ins in md.disasm(bytes(data),base+helper_start):
+            off=ins.address-base-helper_start
+            for operand in ins.operands:
+                if operand.type==X86_OP_MEM and operand.mem.base==X86_REG_RIP:
+                    masks.append((off+ins.disp_offset,4))
+                elif operand.type==X86_OP_IMM and (ins.group(capstone.CS_GRP_CALL) or ins.group(capstone.CS_GRP_JUMP)) and not helper_start<=operand.imm-base<helper_end:
+                    masks.append((off+ins.imm_offset,ins.imm_size))
+        normalized=bytearray(data)
+        anchor_mask=bytearray([255]*32)
+        for off,size in masks:
+            normalized[off:off+size]=bytes(size)
+            for pos in range(off,min(off+size,32)):anchor_mask[pos]=0
+        anchor=bytes(a&m for a,m in zip(data[:32],anchor_mask))
+        lines += ['static const HfMask helper_masks[] = {'+','.join('{'+str(o)+','+str(n)+'}' for o,n in masks)+'};']
+        lines += ['static const HfProfile helper_profile = {'+'"OUTLINED_LAYOUT_HELPER",'+str(len(data))+','+byte_array(anchor)+','+byte_array(anchor_mask)+','+byte_array(hashlib.sha256(normalized).digest())+',helper_masks,'+str(len(masks))+',0'+ '};']
     assert globals_ and edges
     lines += ['static const HfProfile hf_profiles[HF_PROFILE_COUNT] = {', ',\n'.join(profiles), '};',
               'static const HfReference hf_edges[] = {' + ','.join('{' + ','.join(map(str,e)) + '}' for e in edges) + '};',
               'static const HfReference hf_global_refs[] = {' + ','.join('{' + ','.join(map(str,e)) + '}' for e in globals_) + '};']
     lines += ['static const HfReference hf_capsule_name_ref = {'+','.join(map(str,literal_ref))+'};', 'static const unsigned char hf_capsule_name[] = '+byte_array(literal)+';']
-    (ROOT / 'src/address_profile.h').write_text('\n'.join(lines)+'\n', encoding='utf-8')
+    output='\n'.join(lines)+'\n'
+    if development:
+        for symbol in ['masks_', 'helper_masks', 'helper_profile', 'hf_profiles', 'hf_edges', 'hf_global_refs', 'hf_capsule_name_ref', 'hf_capsule_name']:
+            output=output.replace(symbol,'dev_'+symbol)
+        output=output.replace('dev_dev_','dev_')
+    (ROOT / ('src/address_profile_development.h' if development else 'src/address_profile.h')).write_bytes(output.encode('utf-8'))
     print(f'Generated {len(profiles)} full-function fingerprints, {len(edges)} call edges, {len(globals_)} manager references')
 
 

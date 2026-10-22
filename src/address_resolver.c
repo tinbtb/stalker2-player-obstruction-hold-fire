@@ -6,6 +6,18 @@
 #include <string.h>
 
 #include "address_profile.h"
+#include "address_profile_development.h"
+
+typedef struct {
+    const HfProfile *profiles;
+    const HfReference *edges, *globals;
+    unsigned edge_count, global_count;
+    const HfProfile *helper;
+    HfReference helper_call;
+    const char *name;
+} LayoutFamily;
+#define COUNT(a) (sizeof(a)/sizeof(*(a)))
+
 
 static BOOL read_memory(uintptr_t address, void *out, SIZE_T size) {
     SIZE_T got=0;
@@ -47,7 +59,7 @@ static BOOL reference_target(uintptr_t base, uint32_t image_size, const uint32_t
     *target=(uint32_t)value;
     return TRUE;
 }
-BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globals[HF_GLOBAL_COUNT], HfLog log) {
+static BOOL resolve_family(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globals[HF_GLOBAL_COUNT], HfLog log, const LayoutFamily *family) {
     uintptr_t base=(uintptr_t)module;
     IMAGE_DOS_HEADER dos;
     IMAGE_NT_HEADERS64 nt;
@@ -83,7 +95,8 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
        !in_section(sections,nt.FileHeader.NumberOfSections,table.VirtualAddress,table.Size,IMAGE_SCN_MEM_READ,IMAGE_SCN_MEM_WRITE))goto done;
     functions=HeapAlloc(GetProcessHeap(),0,table.Size);
     uint32_t max_size=0;
-    for(unsigned i=0;i<HF_PROFILE_COUNT;i++)if(hf_profiles[i].size>max_size)max_size=hf_profiles[i].size;
+    for(unsigned i=0;i<HF_PROFILE_COUNT;i++)if(family->profiles[i].size>max_size)max_size=family->profiles[i].size;
+    if(family->helper && family->helper->size>max_size)max_size=family->helper->size;
     buffer=HeapAlloc(GetProcessHeap(),0,max_size);
     if(!functions || !buffer || !read_memory(base+table.VirtualAddress,functions,table.Size) ||
        BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0)goto done;
@@ -91,7 +104,7 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
         RUNTIME_FUNCTION f=functions[i];
         if(f.EndAddress<=f.BeginAddress || !inside(f.BeginAddress,f.EndAddress-f.BeginAddress,image_size))continue;
         for(unsigned j=0;j<HF_PROFILE_COUNT;j++) {
-            const HfProfile *p=&hf_profiles[j];
+            const HfProfile *p=&family->profiles[j];
             if(p->leaf || f.EndAddress-f.BeginAddress!=p->size)continue;
             if(!in_section(sections,nt.FileHeader.NumberOfSections,f.BeginAddress,p->size,
                            IMAGE_SCN_MEM_EXECUTE|IMAGE_SCN_MEM_READ,IMAGE_SCN_MEM_WRITE))continue;
@@ -114,8 +127,8 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
         if(!text)goto done;
         if(!read_memory(base+sec->VirtualAddress,text,size)){HeapFree(GetProcessHeap(),0,text);goto done;}
         BOOL overflow=FALSE;
-        for(unsigned j=0;j<HF_PROFILE_COUNT;j++)if(hf_profiles[j].leaf) {
-            const HfProfile *p=&hf_profiles[j];
+        for(unsigned j=0;j<HF_PROFILE_COUNT;j++)if(family->profiles[j].leaf) {
+            const HfProfile *p=&family->profiles[j];
             for(uint32_t off=0;p->size<=size && off<=size-p->size;off++) {
                 if((text[off]&p->anchor_mask[0])!=p->anchor[0])continue;
                 unsigned a=1;for(;a<32 && a<p->size;a++)if((text[off+a]&p->anchor_mask[a])!=p->anchor[a])break;
@@ -139,8 +152,8 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
             for(unsigned c=0;c<matches[j];c++) {
                 BOOL valid=TRUE;
                 rvas[j]=candidates[j][c];
-                for(unsigned e=0;e<sizeof(hf_edges)/sizeof(*hf_edges);e++) {
-                    const HfReference *edge=&hf_edges[e];uint32_t target;
+                for(unsigned e=0;e<family->edge_count;e++) {
+                    const HfReference *edge=&family->edges[e];uint32_t target;
                     if(edge->from==j && matches[edge->to]==1 &&
                        (!reference_target(base,image_size,rvas,edge,&target) || target!=rvas[edge->to]))valid=FALSE;
                     if(edge->to==j && matches[edge->from]==1 &&
@@ -155,18 +168,18 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
         if(!changed)break;
     }
     for(unsigned j=0;j<HF_PROFILE_COUNT;j++)if(matches[j]!=1) {
-        log("resolver: %s matches=%u; refusing hooks",hf_profiles[j].name,matches[j]);goto done;
+        log("resolver: %s matches=%u; refusing hooks",family->profiles[j].name,matches[j]);goto done;
     }
     for(unsigned j=0;j<HF_PROFILE_COUNT;j++)rvas[j]=candidates[j][0];
-    for(unsigned i=0;i<sizeof(hf_edges)/sizeof(*hf_edges);i++) {
+    for(unsigned i=0;i<family->edge_count;i++) {
         uint32_t target;
-        if(!reference_target(base,image_size,rvas,&hf_edges[i],&target) || target!=rvas[hf_edges[i].to]) {
+        if(!reference_target(base,image_size,rvas,&family->edges[i],&target) || target!=rvas[family->edges[i].to]) {
             log("resolver: native call relationship changed; refusing hooks");goto done;
         }
     }
     unsigned seen[HF_GLOBAL_COUNT]={0};
-    for(unsigned i=0;i<sizeof(hf_global_refs)/sizeof(*hf_global_refs);i++) {
-        const HfReference *ref=&hf_global_refs[i];uint32_t target;
+    for(unsigned i=0;i<family->global_count;i++) {
+        const HfReference *ref=&family->globals[i];uint32_t target;
         unsigned width=ref->to==HF_OBJECT_COUNT || ref->to==HF_PLAYER_ID?4:8;
         if(ref->to>=HF_GLOBAL_COUNT || !reference_target(base,image_size,rvas,ref,&target) ||
            (seen[ref->to] && globals[ref->to]!=base+target) || (target&(width-1)) ||
@@ -179,11 +192,25 @@ BOOL hf_resolve(HMODULE module, uint32_t rvas[HF_PROFILE_COUNT], uintptr_t globa
     for(unsigned i=0;i<HF_GLOBAL_COUNT;i++)if(!seen[i])goto done;
     if(globals[HF_OBJECT_COUNT]!=globals[HF_OBJECT_CHUNKS]+20)goto done;
     uint32_t name;
+    const HfReference *name_ref=family->helper?&dev_hf_capsule_name_ref:&hf_capsule_name_ref;
     unsigned char literal[sizeof(hf_capsule_name)];
-    if(!reference_target(base,image_size,rvas,&hf_capsule_name_ref,&name) ||
+    if(!reference_target(base,image_size,rvas,name_ref,&name) ||
        !in_section(sections,nt.FileHeader.NumberOfSections,name,sizeof(literal),IMAGE_SCN_MEM_READ,IMAGE_SCN_MEM_WRITE|IMAGE_SCN_MEM_EXECUTE) ||
        !read_memory(base+name,literal,sizeof(literal)) || memcmp(literal,hf_capsule_name,sizeof(literal))) {
         log("resolver: CapsuleComponent registration name changed");goto done;
+    }
+    if(family->helper) {
+        uint32_t helper_rva;
+        if(!reference_target(base,image_size,rvas,&family->helper_call,&helper_rva) ||
+           !in_section(sections,nt.FileHeader.NumberOfSections,helper_rva,family->helper->size,
+                       IMAGE_SCN_MEM_READ|IMAGE_SCN_MEM_EXECUTE,IMAGE_SCN_MEM_WRITE) ||
+           !fingerprint(alg,base+helper_rva,family->helper,buffer)) {
+            log("resolver: outlined layout helper changed; refusing hooks");goto done;
+        }
+        BOOL found=FALSE;
+        for(unsigned i=0;i<table.Size/sizeof(*functions);i++)
+            if(functions[i].BeginAddress==helper_rva && functions[i].EndAddress-helper_rva==family->helper->size)found=TRUE;
+        if(!found)goto done;
     }
     log("resolver: %u unique function/layout fingerprints and native references validated",HF_PROFILE_COUNT);
     ok=TRUE;
@@ -193,4 +220,13 @@ done:
     if(functions)HeapFree(GetProcessHeap(),0,functions);
     if(!ok) { memset(rvas,0,sizeof(uint32_t)*HF_PROFILE_COUNT);memset(globals,0,sizeof(uintptr_t)*HF_GLOBAL_COUNT); }
     return ok;
+}
+
+BOOL hf_resolve(HMODULE module,uint32_t rvas[HF_PROFILE_COUNT],uintptr_t globals[HF_GLOBAL_COUNT],HfLog log) {
+    static const LayoutFamily families[] = {{hf_profiles,hf_edges,hf_global_refs,COUNT(hf_edges),COUNT(hf_global_refs),NULL,{0},"inline-layout"},{dev_hf_profiles,dev_hf_edges,dev_hf_global_refs,COUNT(dev_hf_edges),COUNT(dev_hf_global_refs),&dev_helper_profile,{HF_AIM,148,152,0},"outlined-layout"}};
+    for(unsigned i=0;i<COUNT(families);i++)
+        if(resolve_family(module,rvas,globals,log,&families[i])) {
+            log("resolver: coherent %s family",families[i].name);return TRUE;
+        }
+    return FALSE;
 }

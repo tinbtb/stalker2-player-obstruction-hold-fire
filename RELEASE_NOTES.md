@@ -1,3 +1,10 @@
+# v0.5.0-beta.2 — Additional native compatibility family
+
+- Recognize a second audited compiler layout, including the outlined aim fallback helper. Require a complete, consistent family before installing hooks.
+- Keep startup-only validation, existing firing behavior, and clean ZIP layout. No runtime scanning or UE4SS dependency.
+- Author confirmed the new ASI works in-game on Steam v2.0.6. The development-only executable passes offline validation and mutation/relocation tests; its gameplay remains untested.
+- Other executable builds may work when their relevant native code matches a validated family. Arbitrary future compiler/layout changes still require review.
+
 # v0.5.0-beta.1 — Startup compatibility and cleaner packages
 
 - Replace the whole-executable hash gate with one startup scan of relevant native functions, layout witnesses, call relationships, and global references.

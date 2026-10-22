@@ -44,3 +44,7 @@ Generation requires the audited baseline hash and is not part of normal builds.
 Only the ASI and optional winhttp.dll are at the ZIP root. The INI and supporting
 files are inside PlayerObstructionHoldFire/. The plugin checks that subfolder
 first, then a legacy adjacent INI only if the new file is absent.
+
+## Local two-family candidate
+
+Use `./build.ps1 -Candidate` to compile and run native tests without changing the pinned release hash or making release ZIPs. Both generated profile headers are build inputs. Regenerate the second header with `scripts/make_address_profile.py <audited-fixture> --family development`. Run `scripts/verify_game_sites.py <fixture> --outlined` for both outlined-family relocation suites. See `COMPATIBILITY_FAMILIES.md` for review evidence and gameplay limits.

@@ -1,4 +1,4 @@
-param([string]$ZigPath = '',[string]$Python = 'python',[string]$GameExe = '')
+param([string]$ZigPath = '',[string]$Python = 'python',[string]$GameExe = '',[switch]$Candidate)
 $ErrorActionPreference = 'Stop'
 if (!$ZigPath) { $ZigPath = Join-Path $PSScriptRoot '.tools/zig-x86_64-windows-0.15.2/zig.exe' }
 $ZigPath = (Resolve-Path -LiteralPath $ZigPath).Path
@@ -36,6 +36,11 @@ if ($GameExe) {
  if ($LASTEXITCODE) { throw 'Offline startup resolution tests failed' }
 }
 
+if ($Candidate) {
+ Get-FileHash (Join-Path $build 'PlayerObstructionHoldFire.asi') -Algorithm SHA256
+ Write-Output 'Unpublished candidate: release package and pinned release hash unchanged.'
+ return
+}
 & (Join-Path $PSScriptRoot 'scripts/get-loader.ps1')
 & $Python (Join-Path $PSScriptRoot 'scripts/package.py')
 if ($LASTEXITCODE) { throw 'Packaging failed' }
